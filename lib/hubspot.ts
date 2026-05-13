@@ -63,9 +63,11 @@ export interface RawTicket {
     createdate?: string;
     hs_lastmodifieddate?: string;
     closed_date?: string;
+    hs_due_date?: string;
     subject?: string;
     nombre_sucursal?: string;
     nombre_producto?: string;
+    hubspot_owner_id?: string;
   };
 }
 
@@ -78,13 +80,17 @@ export interface Ticket {
   subject: string;
   branch: string | null;
   product: string | null;
+  ownerId: string | null;
+  ownerName: string | null;
   createdAt: Date;
   lastModifiedAt: Date | null;
+  dueDate: Date | null;
   closedAt: Date | null;
   isClosed: boolean;
   isNoCorresp: boolean;
   isOpen: boolean;
   daysOpen: number;
+  daysOverdue: number | null;
   daysSinceActivity: number;
   isDelayed: boolean;
   hubspotUrl: string;
@@ -114,6 +120,25 @@ function isTestBranch(raw: string): boolean {
   return val === "99" || val === "";
 }
 
+async function fetchOwners(token: string): Promise<Map<string, string>> {
+  try {
+    const res = await fetch("https://api.hubapi.com/crm/v3/owners?limit=100", {
+      headers: { Authorization: `Bearer ${token}` },
+      next: { revalidate: 3600 },
+    });
+    if (!res.ok) return new Map();
+    const data = await res.json();
+    const map = new Map<string, string>();
+    for (const o of data.results || []) {
+      const name = `${o.firstName || ""} ${o.lastName || ""}`.trim() || o.email || String(o.id);
+      map.set(String(o.id), name);
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
 async function searchPage(token: string, pipelineId: string, after?: string) {
   const body = {
     filterGroups: [
@@ -126,8 +151,8 @@ async function searchPage(token: string, pipelineId: string, after?: string) {
     ],
     properties: [
       "hs_pipeline", "hs_pipeline_stage", "createdate",
-      "hs_lastmodifieddate", "closed_date", "subject",
-      "nombre_sucursal", "nombre_producto",
+      "hs_lastmodifieddate", "closed_date", "hs_due_date",
+      "subject", "nombre_sucursal", "nombre_producto", "hubspot_owner_id",
     ],
     sorts: [{ propertyName: "createdate", direction: "ASCENDING" }],
     limit: 100,
@@ -141,7 +166,7 @@ async function searchPage(token: string, pipelineId: string, after?: string) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-    next: { revalidate: 600 }, // 10 min cache server-side
+    next: { revalidate: 600 },
   });
 
   if (!res.ok) {
@@ -156,6 +181,7 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
   if (!token) throw new Error("HUBSPOT_TOKEN no configurado en variables de entorno");
 
   const now = Date.now();
+  const [owners] = await Promise.all([fetchOwners(token)]);
   const all: Ticket[] = [];
 
   for (const pipelineId of PIPELINE_ORDER) {
@@ -170,12 +196,16 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
         if (TEST_PATTERN.test(subject) || TEST_PATTERN.test(product)) continue;
         const stage = r.properties.hs_pipeline_stage || "";
         const created = new Date(r.properties.createdate || 0);
-        // Ignorar tickets con fecha futura (datos incorrectos en HubSpot)
         if (created.getTime() > now) continue;
+        const rawSucursal = r.properties.nombre_sucursal || "";
+        if (isTestBranch(rawSucursal)) continue;
+        const branch = parseBranch(rawSucursal);
         const closed = r.properties.closed_date ? new Date(r.properties.closed_date) : null;
         const lastModified = r.properties.hs_lastmodifieddate
           ? new Date(r.properties.hs_lastmodifieddate)
           : null;
+        const dueDate = r.properties.hs_due_date ? new Date(r.properties.hs_due_date) : null;
+        const ownerId = r.properties.hubspot_owner_id || null;
         const isClosed = CLOSED_STAGES.has(stage);
         const isNoCorresp = NO_CORRESPONDE_STAGES.has(stage);
         const isOpen = !isClosed && !isNoCorresp;
@@ -183,27 +213,36 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
         const daysSinceActivity = lastModified
           ? Math.floor((now - lastModified.getTime()) / 86400000)
           : daysOpen;
-        const rawSucursal = r.properties.nombre_sucursal || "";
-        if (isTestBranch(rawSucursal)) continue;
-        const branch = parseBranch(rawSucursal);
+
+        // Demora: vencida si tiene due date pasada, sino fallback a 7 días abierto
+        const isPastDue = dueDate ? dueDate.getTime() < now : false;
+        const isDelayed = isOpen && (dueDate ? isPastDue : daysOpen > DEMORA_DAYS);
+        const daysOverdue = isDelayed && dueDate
+          ? Math.floor((now - dueDate.getTime()) / 86400000)
+          : null;
+
         all.push({
           id: r.id,
           pipelineId,
           pipelineName: PIPELINES[pipelineId as keyof typeof PIPELINES] || pipelineId,
           stageId: stage,
           stageLabel: STAGE_LABELS[stage] || stage,
-          subject: r.properties.subject || "(sin asunto)",
+          subject,
           branch: branch || null,
           product: product || null,
+          ownerId,
+          ownerName: ownerId ? (owners.get(ownerId) ?? null) : null,
           createdAt: created,
           lastModifiedAt: lastModified,
-          daysSinceActivity,
+          dueDate,
+          daysOverdue,
           closedAt: closed,
           isClosed,
           isNoCorresp,
           isOpen,
           daysOpen,
-          isDelayed: isOpen && daysOpen > DEMORA_DAYS,
+          daysSinceActivity,
+          isDelayed,
           hubspotUrl: `${HUBSPOT_BASE_URL}/${r.id}`,
         });
       }

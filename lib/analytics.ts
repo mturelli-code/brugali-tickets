@@ -20,12 +20,23 @@ export interface BranchMetrics {
   total: number;
   closed: number;
   delayed: number;
+  delayedTickets: Ticket[];
   byArea: Record<string, number>;
   motives: Record<string, number>;
   topMotive: [string, number];
   lastActivity: Date | null;
   daysSinceActivity: number | null;
   closeRate: number;
+}
+
+export interface OwnerMetrics {
+  ownerId: string | null;
+  ownerName: string;
+  total: number;
+  open: number;
+  delayed: number;
+  delayedTickets: Ticket[];
+  areas: Record<string, number>;
 }
 
 export interface ProductAlert {
@@ -103,6 +114,7 @@ export function buildBranchMetrics(tickets: Ticket[]): BranchMetrics[] {
         total: 0,
         closed: 0,
         delayed: 0,
+        delayedTickets: [],
         byArea: {},
         motives: {},
         topMotive: ["—", 0],
@@ -114,7 +126,10 @@ export function buildBranchMetrics(tickets: Ticket[]): BranchMetrics[] {
     }
     b.total++;
     if (t.isClosed) b.closed++;
-    if (t.isDelayed) b.delayed++;
+    if (t.isDelayed) {
+      b.delayed++;
+      b.delayedTickets.push(t);
+    }
     b.byArea[t.pipelineName] = (b.byArea[t.pipelineName] || 0) + 1;
     b.motives[t.subject] = (b.motives[t.subject] || 0) + 1;
     if (!b.lastActivity || t.createdAt > b.lastActivity) {
@@ -206,6 +221,36 @@ export function lastClosedWeekRange(today = new Date()): {
   prevStart.setUTCDate(prevEnd.getUTCDate() - 6);
   prevStart.setUTCHours(0, 0, 0, 0);
   return { start, end, prevStart, prevEnd };
+}
+
+export function buildOwnerMetrics(tickets: Ticket[]): OwnerMetrics[] {
+  const map = new Map<string, OwnerMetrics>();
+  for (const t of tickets) {
+    const key = t.ownerId ?? "__sin_asignar__";
+    let o = map.get(key);
+    if (!o) {
+      o = {
+        ownerId: t.ownerId,
+        ownerName: t.ownerName ?? "Sin asignar",
+        total: 0,
+        open: 0,
+        delayed: 0,
+        delayedTickets: [],
+        areas: {},
+      };
+      map.set(key, o);
+    }
+    o.total++;
+    if (t.isOpen) o.open++;
+    if (t.isDelayed) {
+      o.delayed++;
+      o.delayedTickets.push(t);
+    }
+    o.areas[t.pipelineName] = (o.areas[t.pipelineName] || 0) + 1;
+  }
+  return Array.from(map.values())
+    .filter((o) => o.open > 0)
+    .sort((a, b) => b.delayed - a.delayed || b.open - a.open);
 }
 
 export function inRange(t: Ticket, start: Date, end: Date): boolean {
