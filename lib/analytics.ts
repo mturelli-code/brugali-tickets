@@ -147,7 +147,7 @@ export function detectProductAlerts(
     groups.set(key, arr);
   }
   const alerts: ProductAlert[] = [];
-  for (const [product, ts] of groups.entries()) {
+  for (const [product, ts] of Array.from(groups.entries())) {
     if (ts.length >= minCount) {
       const branches = Array.from(new Set(ts.map((t) => t.branch).filter(Boolean))) as string[];
       alerts.push({ product, count: ts.length, branches: branches.sort(), tickets: ts });
