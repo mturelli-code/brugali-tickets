@@ -91,6 +91,7 @@ export interface Ticket {
 const HUBSPOT_API = "https://api.hubapi.com/crm/v3/objects/tickets/search";
 const DEMORA_DAYS = 7;
 const Q2_START_MS = Date.UTC(2026, 3, 1); // 1 abril 2026
+const TEST_PATTERN = /\b(test|prueba)\b/i;
 
 async function searchPage(token: string, pipelineId: string, after?: string) {
   const body = {
@@ -143,6 +144,8 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
       const data: any = await searchPage(token, pipelineId, after);
       const raw: RawTicket[] = data.results || [];
       for (const r of raw) {
+        const subject = r.properties.subject || "";
+        if (TEST_PATTERN.test(subject)) continue;
         const stage = r.properties.hs_pipeline_stage || "";
         const created = new Date(r.properties.createdate || 0);
         const closed = r.properties.closed_date ? new Date(r.properties.closed_date) : null;
