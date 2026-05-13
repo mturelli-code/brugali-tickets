@@ -79,11 +79,13 @@ export interface Ticket {
   branch: string | null;
   product: string | null;
   createdAt: Date;
+  lastModifiedAt: Date | null;
   closedAt: Date | null;
   isClosed: boolean;
   isNoCorresp: boolean;
   isOpen: boolean;
   daysOpen: number;
+  daysSinceActivity: number;
   isDelayed: boolean;
   hubspotUrl: string;
 }
@@ -92,6 +94,25 @@ const HUBSPOT_API = "https://api.hubapi.com/crm/v3/objects/tickets/search";
 const DEMORA_DAYS = 7;
 const Q2_START_MS = Date.UTC(2026, 3, 1); // 1 abril 2026
 const TEST_PATTERN = /\b(test|prueba)\b/i;
+
+function parseBranch(raw: string): string {
+  const s = raw.trim();
+  if (!s) return "";
+  if (s.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(s);
+      return String(parsed.value ?? parsed.name ?? "");
+    } catch {
+      return "";
+    }
+  }
+  return s;
+}
+
+function isTestBranch(raw: string): boolean {
+  const val = parseBranch(raw);
+  return val === "99" || val === "";
+}
 
 async function searchPage(token: string, pipelineId: string, after?: string) {
   const body = {
@@ -145,16 +166,20 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
       const raw: RawTicket[] = data.results || [];
       for (const r of raw) {
         const subject = r.properties.subject || "";
-        if (TEST_PATTERN.test(subject)) continue;
+        const product = r.properties.nombre_producto?.trim() || "";
+        if (TEST_PATTERN.test(subject) || TEST_PATTERN.test(product)) continue;
         const stage = r.properties.hs_pipeline_stage || "";
         const created = new Date(r.properties.createdate || 0);
+        // Ignorar tickets con fecha futura (datos incorrectos en HubSpot)
+        if (created.getTime() > now) continue;
         const closed = r.properties.closed_date ? new Date(r.properties.closed_date) : null;
         const isClosed = CLOSED_STAGES.has(stage);
         const isNoCorresp = NO_CORRESPONDE_STAGES.has(stage);
         const isOpen = !isClosed && !isNoCorresp;
         const daysOpen = Math.floor((now - created.getTime()) / 86400000);
-        let branch = (r.properties.nombre_sucursal || "").trim();
-        if (branch === "99" || branch === "") branch = "";
+        const rawSucursal = r.properties.nombre_sucursal || "";
+        if (isTestBranch(rawSucursal)) continue;
+        const branch = parseBranch(rawSucursal);
         all.push({
           id: r.id,
           pipelineId,
@@ -163,7 +188,7 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
           stageLabel: STAGE_LABELS[stage] || stage,
           subject: r.properties.subject || "(sin asunto)",
           branch: branch || null,
-          product: r.properties.nombre_producto?.trim() || null,
+          product: product || null,
           createdAt: created,
           closedAt: closed,
           isClosed,

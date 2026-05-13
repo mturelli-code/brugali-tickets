@@ -5,6 +5,7 @@ import {
   detectProductAlerts,
   fmtDate,
 } from "@/lib/analytics";
+import BranchTable from "@/components/BranchTable";
 
 export const revalidate = 600;
 
@@ -186,74 +187,9 @@ export default async function OperativoPage() {
         <h2 className="font-serif font-bold text-xl text-accent mb-4">
           Por sucursal — Q2 acumulado
         </h2>
-        <div className="bg-surface border border-border rounded-xl overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-surface2 text-muted uppercase tracking-wider text-xs">
-              <tr>
-                <th className="text-left py-3 px-3">Sucursal</th>
-                <th className="text-right py-3 px-3">Total Q2</th>
-                <th className="text-right py-3 px-3">% Cierre</th>
-                <th className="text-right py-3 px-3">Demorados</th>
-                <th className="text-left py-3 px-3">Desglose por área</th>
-                <th className="text-left py-3 px-3">Motivo predominante</th>
-                <th className="text-left py-3 px-3">Última actualización</th>
-              </tr>
-            </thead>
-            <tbody>
-              {branches.slice(0, 20).map((b) => {
-                const cierreColor =
-                  b.closeRate >= 75
-                    ? "text-brugaligreen"
-                    : b.closeRate >= 50
-                    ? "text-brugaliamber"
-                    : "text-brugalired";
-                const lastTxt =
-                  b.daysSinceActivity === null
-                    ? "—"
-                    : b.daysSinceActivity === 0
-                    ? "hoy"
-                    : b.daysSinceActivity <= 7
-                    ? `hace ${b.daysSinceActivity}d`
-                    : `hace ${b.daysSinceActivity}d ⚠`;
-                const lastColor = (b.daysSinceActivity || 0) > 7 ? "text-brugaliamber" : "text-text";
-                return (
-                  <tr key={b.name} className="border-t border-border">
-                    <td className="py-2 px-3 font-medium">{b.name}</td>
-                    <td className="py-2 px-3 text-right font-mono">{b.total}</td>
-                    <td className={`py-2 px-3 text-right font-mono font-semibold ${cierreColor}`}>
-                      {Math.round(b.closeRate)}%
-                    </td>
-                    <td className="py-2 px-3 text-right font-mono">
-                      {b.delayed > 0 ? (
-                        <span className="text-brugalired font-semibold">{b.delayed}</span>
-                      ) : (
-                        0
-                      )}
-                    </td>
-                    <td className="py-2 px-3 text-xs">
-                      {Object.entries(b.byArea)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([area, n]) => (
-                          <span
-                            key={area}
-                            className="inline-block bg-surface2 text-muted px-2 py-0.5 rounded-full mr-1 mb-1 font-mono text-[10px]"
-                          >
-                            {area}: {n}
-                          </span>
-                        ))}
-                    </td>
-                    <td className="py-2 px-3 text-xs">
-                      {b.topMotive[0]} ({b.topMotive[1]})
-                    </td>
-                    <td className={`py-2 px-3 text-xs ${lastColor}`}>{lastTxt}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <BranchTable branches={branches} />
         <p className="text-xs text-dim mt-2">
-          Se excluyen tickets sin sucursal asignada (código &quot;99&quot;).
+          Hacé clic en cualquier columna para ordenar. Se excluyen tickets de sucursal 99 (pruebas/configuración).
         </p>
       </section>
     </div>
