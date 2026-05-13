@@ -137,6 +137,7 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
   const all: Ticket[] = [];
 
   for (const pipelineId of PIPELINE_ORDER) {
+    await new Promise((r) => setTimeout(r, 250));
     let after: string | undefined = undefined;
     do {
       const data: any = await searchPage(token, pipelineId, after);
