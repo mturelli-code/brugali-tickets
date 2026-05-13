@@ -124,6 +124,13 @@ function isTestBranch(raw: string): boolean {
   return val === "99" || val === "";
 }
 
+function parseHsDate(val: string | undefined): Date | null {
+  if (!val) return null;
+  // HubSpot devuelve fechas como ISO "2026-05-10" o como timestamp ms "1746835200000"
+  if (/^\d{10,}$/.test(val)) return new Date(Number(val));
+  return new Date(val);
+}
+
 async function fetchOwners(token: string): Promise<Map<string, string>> {
   try {
     const map = new Map<string, string>();
@@ -168,21 +175,28 @@ async function searchPage(token: string, pipelineId: string, after?: string) {
     ...(after ? { after } : {}),
   };
 
-  const res = await fetch(HUBSPOT_API, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-    next: { revalidate: 600 },
-  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const res = await fetch(HUBSPOT_API, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      next: { revalidate: 600 },
+    });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`HubSpot API ${res.status}: ${text}`);
+    if (res.status === 429) {
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+      continue;
+    }
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`HubSpot API ${res.status}: ${text}`);
+    }
+    return res.json();
   }
-  return res.json();
+  throw new Error("HubSpot API: rate limit superado después de 3 intentos");
 }
 
 export async function getAllTickets(): Promise<Ticket[]> {
@@ -194,7 +208,7 @@ export async function getAllTickets(): Promise<Ticket[]> {
   const all: Ticket[] = [];
 
   for (const pipelineId of PIPELINE_ORDER) {
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 400));
     let after: string | undefined = undefined;
     do {
       const data: any = await searchPage(token, pipelineId, after);
@@ -209,11 +223,9 @@ export async function getAllTickets(): Promise<Ticket[]> {
         const rawSucursal = r.properties.nombre_sucursal || "";
         if (isTestBranch(rawSucursal)) continue;
         const branch = parseBranch(rawSucursal);
-        const closed = r.properties.closed_date ? new Date(r.properties.closed_date) : null;
-        const lastModified = r.properties.hs_lastmodifieddate
-          ? new Date(r.properties.hs_lastmodifieddate)
-          : null;
-        const dueDate = r.properties.hs_due_date ? new Date(r.properties.hs_due_date) : null;
+        const closed = parseHsDate(r.properties.closed_date);
+        const lastModified = parseHsDate(r.properties.hs_lastmodifieddate);
+        const dueDate = parseHsDate(r.properties.hs_due_date);
         const ownerId = r.properties.hubspot_owner_id || null;
         const isClosed = CLOSED_STAGES.has(stage);
         const isNoCorresp = NO_CORRESPONDE_STAGES.has(stage);

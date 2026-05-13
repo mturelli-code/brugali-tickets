@@ -3,12 +3,10 @@ import {
   buildAreaMetrics,
   buildBranchMetrics,
   buildOwnerMetrics,
-  buildActionAlerts,
   detectProductAlerts,
   fmtDate,
 } from "@/lib/analytics";
 import BranchTable from "@/components/BranchTable";
-import AlertPanel from "@/components/AlertPanel";
 
 export const revalidate = 600;
 
@@ -31,7 +29,6 @@ export default async function OperativoPage() {
   const areas = buildAreaMetrics(tickets);
   const branches = buildBranchMetrics(tickets);
   const owners = buildOwnerMetrics(tickets);
-  const actionAlerts = buildActionAlerts(tickets);
   const alerts = detectProductAlerts(tickets);
   const today = new Date();
 
@@ -43,14 +40,6 @@ export default async function OperativoPage() {
           Q2 2026 al {fmtDate(today)} · detalle por área y sucursal con links directos a HubSpot
         </p>
       </div>
-
-      {/* Alertas de seguimiento */}
-      <section>
-        <h2 className="font-serif font-bold text-xl text-accent mb-4">
-          Alertas de seguimiento
-        </h2>
-        <AlertPanel alerts={actionAlerts} />
-      </section>
 
       {/* Alertas Calidad */}
       <section>
