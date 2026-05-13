@@ -299,6 +299,73 @@ export interface ActionAlerts {
   vencidos: Ticket[];          // due date vencida, abiertos
 }
 
+export interface FollowUpTicket {
+  ticket: Ticket;
+  reasons: string[];
+  urgency: number;
+}
+
+export interface OwnerFollowUp {
+  ownerId: string | null;
+  ownerName: string;
+  tickets: FollowUpTicket[];
+  totalUrgency: number;
+  vencidos: number;
+  sinRespuesta: number;
+  estancados: number;
+}
+
+export function buildFollowUpByOwner(tickets: Ticket[]): OwnerFollowUp[] {
+  const open = tickets.filter((t) => t.isOpen);
+  const tagged = new Map<string, FollowUpTicket>();
+
+  for (const t of open) {
+    const reasons: string[] = [];
+    let urgency = 0;
+    if (t.isDelayed) {
+      const days = t.daysOverdue ?? t.daysOpen;
+      reasons.push(`Vencido hace ${days}d`);
+      urgency += days * 3;
+    }
+    if (t.stageLabel === "Nuevo" && t.daysSinceActivity > 2) {
+      reasons.push(`Sin respuesta · ${t.daysSinceActivity}d`);
+      urgency += t.daysSinceActivity * 2;
+    }
+    if (t.stageLabel === "Esp. resp. interna" && t.daysSinceActivity > 5) {
+      reasons.push(`Estancado interno · ${t.daysSinceActivity}d`);
+      urgency += t.daysSinceActivity;
+    }
+    if (reasons.length > 0) tagged.set(t.id, { ticket: t, reasons, urgency });
+  }
+
+  const ownerMap = new Map<string, OwnerFollowUp>();
+  for (const item of Array.from(tagged.values())) {
+    const key = item.ticket.ownerId ?? "__sin__";
+    let o = ownerMap.get(key);
+    if (!o) {
+      o = {
+        ownerId: item.ticket.ownerId,
+        ownerName: item.ticket.ownerName ?? "Sin asignar",
+        tickets: [],
+        totalUrgency: 0,
+        vencidos: 0,
+        sinRespuesta: 0,
+        estancados: 0,
+      };
+      ownerMap.set(key, o);
+    }
+    o.tickets.push(item);
+    o.totalUrgency += item.urgency;
+    if (item.ticket.isDelayed) o.vencidos++;
+    if (item.ticket.stageLabel === "Nuevo" && item.ticket.daysSinceActivity > 2) o.sinRespuesta++;
+    if (item.ticket.stageLabel === "Esp. resp. interna" && item.ticket.daysSinceActivity > 5) o.estancados++;
+  }
+
+  return Array.from(ownerMap.values())
+    .map((o) => ({ ...o, tickets: o.tickets.sort((a, b) => b.urgency - a.urgency) }))
+    .sort((a, b) => b.totalUrgency - a.totalUrgency);
+}
+
 export function buildActionAlerts(tickets: Ticket[]): ActionAlerts {
   const open = tickets.filter((t) => t.isOpen);
   return {

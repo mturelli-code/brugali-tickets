@@ -129,7 +129,7 @@ async function fetchOwners(token: string): Promise<Map<string, string>> {
     const map = new Map<string, string>();
     let after: string | undefined;
     do {
-      const url = `https://api.hubapi.com/crm/v3/owners?limit=100${after ? `&after=${after}` : ""}`;
+      const url = `https://api.hubapi.com/crm/v3/owners?limit=100&includeDeactivated=true${after ? `&after=${after}` : ""}`;
       const res = await fetch(url, {
         headers: { Authorization: `Bearer ${token}` },
         next: { revalidate: 3600 },
@@ -243,7 +243,7 @@ export async function getAllTickets(): Promise<Ticket[]> {
           branch: branch || null,
           product: product || null,
           ownerId,
-          ownerName: ownerId ? (owners.get(ownerId) ?? null) : null,
+          ownerName: ownerId ? (owners.get(ownerId) ?? `ID:${ownerId}`) : null,
           createdAt: created,
           lastModifiedAt: lastModified,
           dueDate,
