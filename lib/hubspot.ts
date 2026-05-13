@@ -173,10 +173,16 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
         // Ignorar tickets con fecha futura (datos incorrectos en HubSpot)
         if (created.getTime() > now) continue;
         const closed = r.properties.closed_date ? new Date(r.properties.closed_date) : null;
+        const lastModified = r.properties.hs_lastmodifieddate
+          ? new Date(r.properties.hs_lastmodifieddate)
+          : null;
         const isClosed = CLOSED_STAGES.has(stage);
         const isNoCorresp = NO_CORRESPONDE_STAGES.has(stage);
         const isOpen = !isClosed && !isNoCorresp;
         const daysOpen = Math.floor((now - created.getTime()) / 86400000);
+        const daysSinceActivity = lastModified
+          ? Math.floor((now - lastModified.getTime()) / 86400000)
+          : daysOpen;
         const rawSucursal = r.properties.nombre_sucursal || "";
         if (isTestBranch(rawSucursal)) continue;
         const branch = parseBranch(rawSucursal);
@@ -190,6 +196,8 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
           branch: branch || null,
           product: product || null,
           createdAt: created,
+          lastModifiedAt: lastModified,
+          daysSinceActivity,
           closedAt: closed,
           isClosed,
           isNoCorresp,

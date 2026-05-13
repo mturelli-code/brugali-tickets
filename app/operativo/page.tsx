@@ -147,30 +147,46 @@ export default async function OperativoPage() {
                         <th className="text-left py-2 px-3 font-medium">Sucursal</th>
                         <th className="text-left py-2 px-3 font-medium">Etapa</th>
                         <th className="text-left py-2 px-3 font-medium">Ingresó</th>
-                        <th className="text-right py-2 px-3 font-medium">Días</th>
+                        <th className="text-left py-2 px-3 font-medium">Última actividad</th>
+                        <th className="text-right py-2 px-3 font-medium">Días abierto</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {a.delayed.map((t) => (
-                        <tr key={t.id} className="border-t border-border">
-                          <td className="py-2 px-3">
-                            <a
-                              href={t.hubspotUrl}
-                              target="_blank"
-                              rel="noopener"
-                              className="text-accent underline decoration-dotted hover:text-brugaliorange"
-                            >
-                              {t.subject}
-                            </a>
-                          </td>
-                          <td className="py-2 px-3">{t.branch || "—"}</td>
-                          <td className="py-2 px-3">{t.stageLabel}</td>
-                          <td className="py-2 px-3">{fmtDate(t.createdAt)}</td>
-                          <td className="py-2 px-3 text-right font-mono font-semibold text-brugalired">
-                            {t.daysOpen}d
-                          </td>
-                        </tr>
-                      ))}
+                      {a.delayed.map((t) => {
+                        const actColor =
+                          t.daysSinceActivity > 7
+                            ? "text-brugalired"
+                            : t.daysSinceActivity > 3
+                            ? "text-brugaliamber"
+                            : "text-brugaligreen";
+                        const actTxt =
+                          t.daysSinceActivity === 0
+                            ? "hoy"
+                            : t.daysSinceActivity === 1
+                            ? "ayer"
+                            : `hace ${t.daysSinceActivity}d`;
+                        return (
+                          <tr key={t.id} className="border-t border-border">
+                            <td className="py-2 px-3">
+                              <a
+                                href={t.hubspotUrl}
+                                target="_blank"
+                                rel="noopener"
+                                className="text-accent underline decoration-dotted hover:text-brugaliorange"
+                              >
+                                {t.subject}
+                              </a>
+                            </td>
+                            <td className="py-2 px-3">{t.branch || "—"}</td>
+                            <td className="py-2 px-3">{t.stageLabel}</td>
+                            <td className="py-2 px-3">{fmtDate(t.createdAt)}</td>
+                            <td className={`py-2 px-3 font-medium ${actColor}`}>{actTxt}</td>
+                            <td className="py-2 px-3 text-right font-mono font-semibold text-brugalired">
+                              {t.daysOpen}d
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
