@@ -18,7 +18,7 @@ export default function Nav() {
           <Link href="/operativo" className="px-3 py-1 rounded-full hover:bg-surface2 text-text font-medium">
             Operativo
           </Link>
-          <Link href="/alertas" className="px-3 py-1 rounded-full bg-brugalired/10 text-brugalired hover:bg-brugalired/20 font-medium">
+          <Link href="/alertas" className="px-3 py-1 rounded-full hover:bg-surface2 text-text font-medium">
             Seguimiento
           </Link>
         </nav>

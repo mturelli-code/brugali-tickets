@@ -145,7 +145,9 @@ async function fetchOwners(token: string): Promise<Map<string, string>> {
       const data = await res.json();
       for (const o of data.results || []) {
         const name = `${o.firstName || ""} ${o.lastName || ""}`.trim() || o.email || String(o.id);
-        map.set(String(o.id), name);
+        // HubSpot usa id (CRM owner ID) o userId según el contexto — mapeamos ambos
+        if (o.id) map.set(String(o.id), name);
+        if (o.userId) map.set(String(o.userId), name);
       }
       after = data.paging?.next?.after;
     } while (after);
@@ -235,7 +237,7 @@ export async function getAllTickets(): Promise<Ticket[]> {
           ? Math.floor((now - lastModified.getTime()) / 86400000)
           : daysOpen;
         const isPastDue = dueDate ? dueDate.getTime() < now : false;
-        const isDelayed = isOpen && (dueDate ? isPastDue : daysOpen > DEMORA_DAYS);
+        const isDelayed = isOpen && (isPastDue || daysOpen > DEMORA_DAYS);
         const daysOverdue = isDelayed && dueDate
           ? Math.floor((now - dueDate.getTime()) / 86400000)
           : null;

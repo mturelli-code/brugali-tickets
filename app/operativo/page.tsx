@@ -2,7 +2,6 @@ import { getAllTickets } from "@/lib/hubspot";
 import {
   buildAreaMetrics,
   buildBranchMetrics,
-  buildOwnerMetrics,
   detectProductAlerts,
   fmtDate,
 } from "@/lib/analytics";
@@ -28,7 +27,6 @@ export default async function OperativoPage() {
   const tickets = allTickets.filter((t) => t.quarter === 2);
   const areas = buildAreaMetrics(tickets);
   const branches = buildBranchMetrics(tickets);
-  const owners = buildOwnerMetrics(tickets);
   const alerts = detectProductAlerts(tickets);
   const today = new Date();
 
@@ -201,74 +199,6 @@ export default async function OperativoPage() {
         ))}
       </section>
 
-      {/* Por responsable */}
-      <section>
-        <h2 className="font-serif font-bold text-xl text-accent mb-4">Por responsable</h2>
-        <div className="bg-surface border border-border rounded-xl overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-surface2 text-muted uppercase tracking-wider text-xs">
-              <tr>
-                <th className="text-left py-3 px-3">Responsable</th>
-                <th className="text-right py-3 px-3">Abiertos</th>
-                <th className="text-right py-3 px-3">Demorados</th>
-                <th className="text-left py-3 px-3">Áreas</th>
-                <th className="text-left py-3 px-3">Tickets demorados</th>
-              </tr>
-            </thead>
-            <tbody>
-              {owners.map((o) => (
-                <tr key={o.ownerId ?? "sin"} className="border-t border-border">
-                  <td className="py-2 px-3 font-medium">{o.ownerName}</td>
-                  <td className="py-2 px-3 text-right font-mono">{o.open}</td>
-                  <td className="py-2 px-3 text-right font-mono">
-                    {o.delayed > 0 ? (
-                      <span className="text-brugalired font-semibold">{o.delayed}</span>
-                    ) : (
-                      <span className="text-brugaligreen">0</span>
-                    )}
-                  </td>
-                  <td className="py-2 px-3 text-xs">
-                    {Object.entries(o.areas)
-                      .sort((a, b) => b[1] - a[1])
-                      .map(([area, n]) => (
-                        <span key={area} className="inline-block bg-surface2 text-muted px-2 py-0.5 rounded-full mr-1 font-mono text-[10px]">
-                          {area}: {n}
-                        </span>
-                      ))}
-                  </td>
-                  <td className="py-2 px-3 text-xs space-y-0.5">
-                    {o.delayedTickets.slice(0, 3).map((t) => (
-                      <div key={t.id}>
-                        <a
-                          href={t.hubspotUrl}
-                          target="_blank"
-                          rel="noopener"
-                          className="text-accent underline decoration-dotted hover:text-brugaliorange"
-                        >
-                          {t.subject}
-                        </a>
-                        <span className="text-muted ml-1">
-                          · {t.branch ?? "—"} · {t.daysOverdue !== null ? `${t.daysOverdue}d vencido` : `${t.daysOpen}d abierto`}
-                        </span>
-                      </div>
-                    ))}
-                    {o.delayedTickets.length > 3 && (
-                      <div className="text-dim">+{o.delayedTickets.length - 3} más</div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {owners.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="py-4 px-3 text-center text-muted text-xs">
-                    Sin tickets abiertos con responsable asignado
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
 
       {/* Tabla por sucursal */}
       <section>
