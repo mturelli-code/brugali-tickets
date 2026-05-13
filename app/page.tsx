@@ -94,33 +94,39 @@ export default async function ExecPage() {
       {/* KPIs Q2 */}
       <section>
         <h2 className="font-serif font-bold text-xl text-accent mb-4">Panorama Q2</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          <KpiCard label="Tickets Q2" value={total} sub="ingresados desde 1-abr" tone="accent" />
-          <KpiCard
-            label="Cerrados"
-            value={closed}
-            sub={`${total ? Math.round((closed / total) * 100) : 0}% tasa de cierre`}
-            tone="green"
-          />
-          <KpiCard
-            label="Abiertos"
-            value={open}
-            sub={`+ ${noCorresp} en "No corresponde"`}
-            tone="amber"
-          />
-          <KpiCard
-            label="Demorados"
-            value={delayed}
-            sub={`${open ? Math.round((delayed / open) * 100) : 0}% de los abiertos`}
-            tone="red"
-          />
-          <KpiCard
-            label="SLA Cumplido"
-            value={slaRate !== null ? `${slaRate}%` : "—"}
-            sub={`${slaOk} de ${closedWithSla.length} cerrados a tiempo`}
-            tone={slaRate !== null && slaRate >= 80 ? "green" : slaRate !== null && slaRate >= 60 ? "amber" : "red"}
-          />
-        </div>
+        {(() => {
+          const closeRate = total ? Math.round((closed / total) * 100) : 0;
+          const delayRate = open ? Math.round((delayed / open) * 100) : 0;
+          return (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              <KpiCard label="Tickets Q2" value={total} sub="ingresados desde 1-abr" tone="accent" />
+              <KpiCard
+                label="Cerrados"
+                value={closed}
+                sub={`${closeRate}% tasa de cierre`}
+                tone={closeRate >= 70 ? "green" : closeRate >= 50 ? "amber" : "red"}
+              />
+              <KpiCard
+                label="Abiertos"
+                value={open}
+                sub={`+ ${noCorresp} en "No corresponde"`}
+                tone={open > 50 ? "red" : open > 20 ? "amber" : "green"}
+              />
+              <KpiCard
+                label="Demorados"
+                value={delayed}
+                sub={`${delayRate}% de los abiertos`}
+                tone={delayRate >= 30 ? "red" : delayRate >= 15 ? "amber" : "green"}
+              />
+              <KpiCard
+                label="SLA Cumplido"
+                value={slaRate !== null ? `${slaRate}%` : "—"}
+                sub={`${slaOk} de ${closedWithSla.length} cerrados a tiempo`}
+                tone={slaRate !== null && slaRate >= 80 ? "green" : slaRate !== null && slaRate >= 60 ? "amber" : "red"}
+              />
+            </div>
+          );
+        })()}
       </section>
 
       {/* Semana cerrada */}

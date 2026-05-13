@@ -126,17 +126,22 @@ function isTestBranch(raw: string): boolean {
 
 async function fetchOwners(token: string): Promise<Map<string, string>> {
   try {
-    const res = await fetch("https://api.hubapi.com/crm/v3/owners?limit=100", {
-      headers: { Authorization: `Bearer ${token}` },
-      next: { revalidate: 3600 },
-    });
-    if (!res.ok) return new Map();
-    const data = await res.json();
     const map = new Map<string, string>();
-    for (const o of data.results || []) {
-      const name = `${o.firstName || ""} ${o.lastName || ""}`.trim() || o.email || String(o.id);
-      map.set(String(o.id), name);
-    }
+    let after: string | undefined;
+    do {
+      const url = `https://api.hubapi.com/crm/v3/owners?limit=100${after ? `&after=${after}` : ""}`;
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        next: { revalidate: 3600 },
+      });
+      if (!res.ok) break;
+      const data = await res.json();
+      for (const o of data.results || []) {
+        const name = `${o.firstName || ""} ${o.lastName || ""}`.trim() || o.email || String(o.id);
+        map.set(String(o.id), name);
+      }
+      after = data.paging?.next?.after;
+    } while (after);
     return map;
   } catch {
     return new Map();

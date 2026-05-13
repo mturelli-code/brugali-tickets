@@ -293,6 +293,27 @@ export function lastClosedWeekRange(today = new Date()): {
   return { start, end, prevStart, prevEnd };
 }
 
+export interface ActionAlerts {
+  sinRespuesta: Ticket[];      // Nuevo > 2d sin actividad
+  estancadoInterno: Ticket[];  // Esp. resp. interna > 5d sin actividad
+  vencidos: Ticket[];          // due date vencida, abiertos
+}
+
+export function buildActionAlerts(tickets: Ticket[]): ActionAlerts {
+  const open = tickets.filter((t) => t.isOpen);
+  return {
+    sinRespuesta: open
+      .filter((t) => t.stageLabel === "Nuevo" && t.daysSinceActivity > 2)
+      .sort((a, b) => b.daysSinceActivity - a.daysSinceActivity),
+    estancadoInterno: open
+      .filter((t) => t.stageLabel === "Esp. resp. interna" && t.daysSinceActivity > 5)
+      .sort((a, b) => b.daysSinceActivity - a.daysSinceActivity),
+    vencidos: open
+      .filter((t) => t.isDelayed)
+      .sort((a, b) => (b.daysOverdue ?? b.daysOpen) - (a.daysOverdue ?? a.daysOpen)),
+  };
+}
+
 export function buildOwnerMetrics(tickets: Ticket[]): OwnerMetrics[] {
   const map = new Map<string, OwnerMetrics>();
   for (const t of tickets) {
