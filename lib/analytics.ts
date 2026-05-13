@@ -1,5 +1,75 @@
 import { Ticket, PIPELINE_ORDER, PIPELINES } from "./hubspot";
 
+export interface QuarterAreaStats {
+  name: string;
+  total: number;
+  closed: number;
+  closeRate: number;
+  avgResolutionDays: number | null;
+  slaCompliance: number | null;
+}
+
+export interface QuarterStats {
+  quarter: 1 | 2;
+  total: number;
+  closed: number;
+  closeRate: number;
+  avgResolutionDays: number | null;
+  slaCompliance: number | null;
+  byArea: Record<string, QuarterAreaStats>;
+}
+
+export function buildQuarterStats(tickets: Ticket[], quarter: 1 | 2): QuarterStats {
+  const ts = tickets.filter((t) => t.quarter === quarter);
+  const closed = ts.filter((t) => t.isClosed);
+  const closedWithDates = closed.filter((t) => t.closedAt);
+  const avgRes = closedWithDates.length
+    ? closedWithDates.reduce(
+        (s, t) => s + (t.closedAt!.getTime() - t.createdAt.getTime()) / 86400000,
+        0
+      ) / closedWithDates.length
+    : null;
+  const closedWithSla = closed.filter((t) => t.slaCompliant !== null);
+  const slaOk = closedWithSla.filter((t) => t.slaCompliant === true);
+  const slaCompliance = closedWithSla.length > 0
+    ? (slaOk.length / closedWithSla.length) * 100
+    : null;
+
+  const byArea: Record<string, QuarterAreaStats> = {};
+  for (const pid of PIPELINE_ORDER) {
+    const name = PIPELINES[pid as keyof typeof PIPELINES];
+    const pts = ts.filter((t) => t.pipelineId === pid);
+    const pclosed = pts.filter((t) => t.isClosed);
+    const pclosedWithDates = pclosed.filter((t) => t.closedAt);
+    const pavg = pclosedWithDates.length
+      ? pclosedWithDates.reduce(
+          (s, t) => s + (t.closedAt!.getTime() - t.createdAt.getTime()) / 86400000,
+          0
+        ) / pclosedWithDates.length
+      : null;
+    const pslaWith = pclosed.filter((t) => t.slaCompliant !== null);
+    const pslaOk = pslaWith.filter((t) => t.slaCompliant === true);
+    byArea[name] = {
+      name,
+      total: pts.length,
+      closed: pclosed.length,
+      closeRate: pts.length ? (pclosed.length / pts.length) * 100 : 0,
+      avgResolutionDays: pavg,
+      slaCompliance: pslaWith.length > 0 ? (pslaOk.length / pslaWith.length) * 100 : null,
+    };
+  }
+
+  return {
+    quarter,
+    total: ts.length,
+    closed: closed.length,
+    closeRate: ts.length ? (closed.length / ts.length) * 100 : 0,
+    avgResolutionDays: avgRes,
+    slaCompliance,
+    byArea,
+  };
+}
+
 export interface AreaMetrics {
   pipelineId: string;
   name: string;

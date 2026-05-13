@@ -55,6 +55,9 @@ export const STAGE_LABELS: Record<string, string> = {
 export const HUBSPOT_BASE_URL =
   "https://app.hubspot.com/contacts/43958366/record/0-5";
 
+export const Q1_START_MS = Date.UTC(2026, 0, 1);  // 1 ene 2026
+export const Q2_START_MS = Date.UTC(2026, 3, 1);  // 1 abr 2026
+
 export interface RawTicket {
   id: string;
   properties: {
@@ -73,6 +76,7 @@ export interface RawTicket {
 
 export interface Ticket {
   id: string;
+  quarter: 1 | 2;
   pipelineId: string;
   pipelineName: string;
   stageId: string;
@@ -93,12 +97,12 @@ export interface Ticket {
   daysOverdue: number | null;
   daysSinceActivity: number;
   isDelayed: boolean;
+  slaCompliant: boolean | null; // null = no aplica (abierto o sin fecha)
   hubspotUrl: string;
 }
 
 const HUBSPOT_API = "https://api.hubapi.com/crm/v3/objects/tickets/search";
 const DEMORA_DAYS = 7;
-const Q2_START_MS = Date.UTC(2026, 3, 1); // 1 abril 2026
 const TEST_PATTERN = /\b(test|prueba)\b/i;
 
 function parseBranch(raw: string): string {
@@ -144,7 +148,7 @@ async function searchPage(token: string, pipelineId: string, after?: string) {
     filterGroups: [
       {
         filters: [
-          { propertyName: "createdate", operator: "GTE", value: String(Q2_START_MS) },
+          { propertyName: "createdate", operator: "GTE", value: String(Q1_START_MS) },
           { propertyName: "hs_pipeline", operator: "EQ", value: pipelineId },
         ],
       },
@@ -176,12 +180,12 @@ async function searchPage(token: string, pipelineId: string, after?: string) {
   return res.json();
 }
 
-export async function getQ2Tickets(): Promise<Ticket[]> {
+export async function getAllTickets(): Promise<Ticket[]> {
   const token = process.env.HUBSPOT_TOKEN;
   if (!token) throw new Error("HUBSPOT_TOKEN no configurado en variables de entorno");
 
   const now = Date.now();
-  const [owners] = await Promise.all([fetchOwners(token)]);
+  const owners = await fetchOwners(token);
   const all: Ticket[] = [];
 
   for (const pipelineId of PIPELINE_ORDER) {
@@ -213,16 +217,19 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
         const daysSinceActivity = lastModified
           ? Math.floor((now - lastModified.getTime()) / 86400000)
           : daysOpen;
-
-        // Demora: vencida si tiene due date pasada, sino fallback a 7 días abierto
         const isPastDue = dueDate ? dueDate.getTime() < now : false;
         const isDelayed = isOpen && (dueDate ? isPastDue : daysOpen > DEMORA_DAYS);
         const daysOverdue = isDelayed && dueDate
           ? Math.floor((now - dueDate.getTime()) / 86400000)
           : null;
+        const slaCompliant = isClosed && dueDate && closed
+          ? closed.getTime() <= dueDate.getTime()
+          : null;
+        const quarter: 1 | 2 = created.getTime() < Q2_START_MS ? 1 : 2;
 
         all.push({
           id: r.id,
+          quarter,
           pipelineId,
           pipelineName: PIPELINES[pipelineId as keyof typeof PIPELINES] || pipelineId,
           stageId: stage,
@@ -243,6 +250,7 @@ export async function getQ2Tickets(): Promise<Ticket[]> {
           daysOpen,
           daysSinceActivity,
           isDelayed,
+          slaCompliant,
           hubspotUrl: `${HUBSPOT_BASE_URL}/${r.id}`,
         });
       }

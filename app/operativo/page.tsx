@@ -1,4 +1,4 @@
-import { getQ2Tickets } from "@/lib/hubspot";
+import { getAllTickets } from "@/lib/hubspot";
 import {
   buildAreaMetrics,
   buildBranchMetrics,
@@ -11,9 +11,9 @@ import BranchTable from "@/components/BranchTable";
 export const revalidate = 600;
 
 export default async function OperativoPage() {
-  let tickets;
+  let allTickets;
   try {
-    tickets = await getQ2Tickets();
+    allTickets = await getAllTickets();
   } catch (err: any) {
     return (
       <div className="p-8 bg-surface border border-brugalired rounded-xl">
@@ -25,6 +25,7 @@ export default async function OperativoPage() {
     );
   }
 
+  const tickets = allTickets.filter((t) => t.quarter === 2);
   const areas = buildAreaMetrics(tickets);
   const branches = buildBranchMetrics(tickets);
   const owners = buildOwnerMetrics(tickets);
