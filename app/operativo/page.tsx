@@ -5,6 +5,7 @@ import {
   detectProductAlerts,
   fmtDate,
 } from "@/lib/analytics";
+import AreaSection from "@/components/AreaSection";
 import BranchTable from "@/components/BranchTable";
 
 export const revalidate = 600;
@@ -29,6 +30,8 @@ export default async function OperativoPage() {
   const branches = buildBranchMetrics(tickets);
   const alerts = detectProductAlerts(tickets);
   const today = new Date();
+
+  const areaList = Object.values(areas).filter((a) => a.total > 0);
 
   return (
     <div className="space-y-10">
@@ -88,117 +91,20 @@ export default async function OperativoPage() {
         )}
       </section>
 
-      {/* Detalle por área */}
-      <section className="space-y-6">
-        <h2 className="font-serif font-bold text-xl text-accent">Detalle por área</h2>
-        {Object.values(areas).map((a) => (
-          <div key={a.pipelineId} className="bg-surface border border-border rounded-xl p-6">
-            <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-border pb-3 mb-4">
-              <h3 className="font-serif font-bold text-xl text-accent">{a.name}</h3>
-              <div className="text-xs text-muted flex gap-4 flex-wrap">
-                <span>
-                  Q2 <strong className="font-mono text-text">{a.total}</strong>
-                </span>
-                <span>
-                  Cerrados <strong className="font-mono text-text">{a.closed}</strong> (
-                  {Math.round(a.closeRate)}%)
-                </span>
-                <span>
-                  Abiertos <strong className="font-mono text-text">{a.open}</strong>
-                </span>
-                <span>
-                  Demorados <strong className="font-mono text-text">{a.delayedCount}</strong>
-                </span>
-              </div>
-            </div>
-
-            <h4 className="text-xs uppercase tracking-wider text-muted font-semibold mb-3">
-              Tipos de ticket
-            </h4>
-            <div className="space-y-2 mb-6">
-              {a.subjectBreakdown.slice(0, 10).map(([subj, cnt]) => {
-                const max = a.subjectBreakdown[0][1];
-                return (
-                  <div key={subj} className="flex items-center gap-3 text-sm">
-                    <span className="w-56 truncate">{subj}</span>
-                    <div className="flex-1 h-1.5 bg-surface2 rounded">
-                      <div
-                        className="h-full bg-accent rounded"
-                        style={{ width: `${(cnt / max) * 100}%` }}
-                      />
-                    </div>
-                    <span className="font-mono text-xs text-muted w-20 text-right">
-                      {cnt} ({Math.round((cnt / a.total) * 100)}%)
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-
-            {a.delayed.length > 0 ? (
-              <div>
-                <h4 className="text-xs uppercase tracking-wider text-brugalired font-semibold mb-2">
-                  🔴 {a.delayedCount} tickets demorados (+7d)
-                </h4>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-surface2 text-muted uppercase tracking-wider">
-                      <tr>
-                        <th className="text-left py-2 px-3 font-medium">Ticket</th>
-                        <th className="text-left py-2 px-3 font-medium">Sucursal</th>
-                        <th className="text-left py-2 px-3 font-medium">Etapa</th>
-                        <th className="text-left py-2 px-3 font-medium">Ingresó</th>
-                        <th className="text-left py-2 px-3 font-medium">Última actividad</th>
-                        <th className="text-right py-2 px-3 font-medium">Días abierto</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {a.delayed.map((t) => {
-                        const actColor =
-                          t.daysSinceActivity > 7
-                            ? "text-brugalired"
-                            : t.daysSinceActivity > 3
-                            ? "text-brugaliamber"
-                            : "text-brugaligreen";
-                        const actTxt =
-                          t.daysSinceActivity === 0
-                            ? "hoy"
-                            : t.daysSinceActivity === 1
-                            ? "ayer"
-                            : `hace ${t.daysSinceActivity}d`;
-                        return (
-                          <tr key={t.id} className="border-t border-border">
-                            <td className="py-2 px-3">
-                              <a
-                                href={t.hubspotUrl}
-                                target="_blank"
-                                rel="noopener"
-                                className="text-accent underline decoration-dotted hover:text-brugaliorange"
-                              >
-                                {t.subject}
-                              </a>
-                            </td>
-                            <td className="py-2 px-3">{t.branch || "—"}</td>
-                            <td className="py-2 px-3">{t.stageLabel}</td>
-                            <td className="py-2 px-3">{fmtDate(t.createdAt)}</td>
-                            <td className={`py-2 px-3 font-medium ${actColor}`}>{actTxt}</td>
-                            <td className="py-2 px-3 text-right font-mono font-semibold text-brugalired">
-                              {t.daysOverdue !== null ? `${t.daysOverdue}d vencido` : `${t.daysOpen}d abierto`}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : (
-              <div className="text-xs text-brugaligreen">✓ Sin tickets demorados</div>
-            )}
-          </div>
-        ))}
+      {/* Detalle por área — desplegable */}
+      <section>
+        <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
+          <h2 className="font-serif font-bold text-xl text-accent">Detalle por área</h2>
+          <span className="text-xs text-muted">
+            Cliqueá cada área para ver el detalle de tipos de ticket y demorados.
+          </span>
+        </div>
+        <div className="space-y-3">
+          {areaList.map((a) => (
+            <AreaSection key={a.pipelineId} area={a} />
+          ))}
+        </div>
       </section>
-
 
       {/* Tabla por sucursal */}
       <section>
@@ -207,7 +113,8 @@ export default async function OperativoPage() {
         </h2>
         <BranchTable branches={branches} />
         <p className="text-xs text-dim mt-2">
-          Hacé clic en cualquier columna para ordenar. Se excluyen tickets de sucursal 99 (pruebas/configuración).
+          Cliqueá la fila de una sucursal para ver el desglose por área y los tickets demorados.
+          Se excluyen tickets sin sucursal asignada (código 99).
         </p>
       </section>
     </div>
