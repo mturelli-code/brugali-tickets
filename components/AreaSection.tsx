@@ -1,23 +1,77 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import type { AreaMetrics } from "@/lib/analytics";
 import { fmtDate } from "@/lib/analytics";
+import type { Ticket } from "@/lib/hubspot";
+
+type SortKey = "subject" | "branch" | "stage" | "created" | "lastActivity" | "days";
 
 export default function AreaSection({ area: a }: { area: AreaMetrics }) {
   const [expanded, setExpanded] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("days");
+  const [asc, setAsc] = useState(false);
 
   const closeColor =
-    a.closeRate >= 75
-      ? "text-brugaligreen"
-      : a.closeRate >= 50
-      ? "text-brugaliamber"
-      : "text-brugalired";
+    a.closeRate >= 75 ? "text-brugaligreen"
+    : a.closeRate >= 50 ? "text-brugaliamber"
+    : "text-brugalired";
   const delayColor =
-    a.delayedCount === 0
-      ? "text-brugaligreen"
-      : a.delayedCount >= 5
-      ? "text-brugalired"
-      : "text-brugaliamber";
+    a.delayedCount === 0 ? "text-brugaligreen"
+    : a.delayedCount >= 5 ? "text-brugalired"
+    : "text-brugaliamber";
+
+  function handleSort(k: SortKey) {
+    if (sortKey === k) setAsc(!asc);
+    else {
+      setSortKey(k);
+      // Default por columna: nombres/etapas ASC, valores numéricos/fechas DESC
+      setAsc(k === "subject" || k === "branch" || k === "stage");
+    }
+  }
+
+  const sortedDelayed = useMemo(() => {
+    const arr = [...a.delayed];
+    arr.sort((x, y) => {
+      let vx: string | number = 0;
+      let vy: string | number = 0;
+      switch (sortKey) {
+        case "subject":
+          vx = x.subject; vy = y.subject; break;
+        case "branch":
+          vx = x.branch || "zzz"; vy = y.branch || "zzz"; break;
+        case "stage":
+          vx = x.stageLabel; vy = y.stageLabel; break;
+        case "created":
+          vx = x.createdAt.getTime(); vy = y.createdAt.getTime(); break;
+        case "lastActivity":
+          vx = x.daysSinceActivity; vy = y.daysSinceActivity; break;
+        case "days":
+          vx = x.daysOverdue ?? x.daysOpen;
+          vy = y.daysOverdue ?? y.daysOpen;
+          break;
+      }
+      if (typeof vx === "string") {
+        return asc
+          ? vx.localeCompare(vy as string)
+          : (vy as string).localeCompare(vx);
+      }
+      return asc ? vx - (vy as number) : (vy as number) - vx;
+    });
+    return arr;
+  }, [a.delayed, sortKey, asc]);
+
+  function Th({ col, label, right }: { col: SortKey; label: string; right?: boolean }) {
+    const active = sortKey === col;
+    const arrow = active ? (asc ? " ↑" : " ↓") : "";
+    return (
+      <th
+        onClick={() => handleSort(col)}
+        className={`py-2 px-3 font-medium cursor-pointer select-none hover:text-accent whitespace-nowrap ${active ? "text-accent" : ""} ${right ? "text-right" : "text-left"}`}
+      >
+        {label}{arrow}
+      </th>
+    );
+  }
 
   return (
     <div className="bg-surface border border-border rounded-xl overflow-hidden">
@@ -109,28 +163,33 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
             </div>
           </div>
 
-          {/* Demorados */}
+          {/* Demorados con sort */}
           {a.delayed.length > 0 ? (
             <div>
-              <h4 className="text-xs uppercase tracking-wider text-brugalired font-semibold mb-2 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-brugalired" />
-                {a.delayedCount} ticket{a.delayedCount !== 1 ? "s" : ""} demorado
-                {a.delayedCount !== 1 ? "s" : ""} (+7d sin cerrar)
-              </h4>
+              <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2">
+                <h4 className="text-xs uppercase tracking-wider text-brugalired font-semibold flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-brugalired" />
+                  {a.delayedCount} ticket{a.delayedCount !== 1 ? "s" : ""} demorado
+                  {a.delayedCount !== 1 ? "s" : ""} (+7d sin cerrar)
+                </h4>
+                <span className="text-[11px] text-muted">
+                  Cliqueá los encabezados para ordenar
+                </span>
+              </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-surface2 text-muted uppercase tracking-wider">
                     <tr>
-                      <th className="text-left py-2 px-3 font-medium">Ticket</th>
-                      <th className="text-left py-2 px-3 font-medium">Sucursal</th>
-                      <th className="text-left py-2 px-3 font-medium">Etapa</th>
-                      <th className="text-left py-2 px-3 font-medium">Ingresó</th>
-                      <th className="text-left py-2 px-3 font-medium">Última actividad</th>
-                      <th className="text-right py-2 px-3 font-medium">Días</th>
+                      <Th col="subject" label="Ticket" />
+                      <Th col="branch" label="Sucursal" />
+                      <Th col="stage" label="Etapa" />
+                      <Th col="created" label="Ingresó" />
+                      <Th col="lastActivity" label="Última actividad" />
+                      <Th col="days" label="Días" right />
                     </tr>
                   </thead>
                   <tbody>
-                    {a.delayed.map((t) => {
+                    {sortedDelayed.map((t: Ticket) => {
                       const actColor =
                         t.daysSinceActivity > 7
                           ? "text-brugalired"
