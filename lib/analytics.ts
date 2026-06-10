@@ -554,3 +554,159 @@ export function buildAgentMetrics(
 
 export { DELAY_LABELS };
 export type { DelaySource };
+
+// =================== ANÁLISIS PROFUNDO POR AGENTE ===================
+
+export interface AgentDeepMetrics {
+  ownerId: string;
+  ownerName: string;
+  // Carga / volumen
+  currentOpen: number;          // tickets abiertos asignados ahora
+  currentDelayed: number;       // demorados actuales
+  totalTouchedQ2: number;       // tickets distintos que pasaron por sus manos en Q2
+  // Tiempos
+  avgHoldingDays: number | null;     // promedio de días que se sienta sobre un ticket antes de soltarlo
+  medianHoldingDays: number | null;  // mediana (más representativa que el promedio)
+  totalHoldingDays: number;          // suma total de días sosteniendo
+  avgResolutionDays: number | null;  // promedio de cierre cuando él lo cerró
+  resolvedCount: number;
+  // Embudos
+  byPipeline: Record<string, number>;     // tickets que recibió por embudo
+  // Donde MÁS se traba (embudo donde sus tickets se demoran más)
+  worstPipeline: { name: string; avgDays: number } | null;
+  // Performance
+  fastResponseRate: number | null;        // % de tickets que soltó en <2 días
+}
+
+interface OwnerStint {
+  ownerId: string;
+  ownerName: string;
+  ticketId: string;
+  pipelineName: string;
+  days: number;
+}
+
+export function buildAgentDeepMetrics(
+  tickets: Ticket[],
+  history: OwnerHistoryMap
+): AgentDeepMetrics[] {
+  const map = new Map<string, AgentDeepMetrics>();
+  const stintsByAgent = new Map<string, OwnerStint[]>();
+
+  function getOrCreate(id: string, name: string): AgentDeepMetrics {
+    let a = map.get(id);
+    if (!a) {
+      a = {
+        ownerId: id,
+        ownerName: name,
+        currentOpen: 0,
+        currentDelayed: 0,
+        totalTouchedQ2: 0,
+        avgHoldingDays: null,
+        medianHoldingDays: null,
+        totalHoldingDays: 0,
+        avgResolutionDays: null,
+        resolvedCount: 0,
+        byPipeline: {},
+        worstPipeline: null,
+        fastResponseRate: null,
+      };
+      map.set(id, a);
+    }
+    return a;
+  }
+
+  // Stats actuales: carga, demorados
+  for (const t of tickets) {
+    const key = t.ownerId ?? "__sin__";
+    const name = t.ownerName ?? "Sin asignar";
+    const a = getOrCreate(key, name);
+    if (t.isOpen) a.currentOpen++;
+    if (t.isDelayed) a.currentDelayed++;
+    if (t.isClosed && t.closedAt) {
+      a.resolvedCount++;
+    }
+  }
+
+  // Tiempos de resolución por owner
+  const resByOwner = new Map<string, number[]>();
+  for (const t of tickets) {
+    if (t.isClosed && t.closedAt) {
+      const key = t.ownerId ?? "__sin__";
+      const arr = resByOwner.get(key) || [];
+      arr.push((t.closedAt.getTime() - t.createdAt.getTime()) / 86400000);
+      resByOwner.set(key, arr);
+    }
+  }
+  for (const [key, arr] of Array.from(resByOwner.entries())) {
+    if (arr.length === 0) continue;
+    const a = map.get(key);
+    if (a) {
+      a.avgResolutionDays = arr.reduce((s, v) => s + v, 0) / arr.length;
+    }
+  }
+
+  // Stints por agente (basado en history)
+  const ticketMap = new Map(tickets.map((t) => [t.id, t]));
+  for (const [ticketId, entries] of Array.from(history.entries())) {
+    const t = ticketMap.get(ticketId);
+    if (!t) continue;
+    for (const entry of entries) {
+      const stint: OwnerStint = {
+        ownerId: entry.ownerId,
+        ownerName: entry.ownerName,
+        ticketId,
+        pipelineName: t.pipelineName,
+        days: entry.days,
+      };
+      const arr = stintsByAgent.get(entry.ownerId) || [];
+      arr.push(stint);
+      stintsByAgent.set(entry.ownerId, arr);
+    }
+  }
+
+  for (const [ownerId, stints] of Array.from(stintsByAgent.entries())) {
+    const a = map.get(ownerId);
+    if (!a) continue;
+    const uniqueTickets = new Set(stints.map((s) => s.ticketId));
+    a.totalTouchedQ2 = uniqueTickets.size;
+    a.totalHoldingDays = stints.reduce((s, v) => s + v.days, 0);
+    if (stints.length > 0) {
+      a.avgHoldingDays = a.totalHoldingDays / stints.length;
+      const sorted = [...stints].map((s) => s.days).sort((x, y) => x - y);
+      a.medianHoldingDays = sorted[Math.floor(sorted.length / 2)];
+      // % de stints rápidos (<2 días)
+      const fast = stints.filter((s) => s.days < 2).length;
+      a.fastResponseRate = (fast / stints.length) * 100;
+    }
+    // Por pipeline
+    for (const s of stints) {
+      a.byPipeline[s.pipelineName] = (a.byPipeline[s.pipelineName] || 0) + 1;
+    }
+    // Worst pipeline: aquel donde el agente tarda más en promedio
+    const byPipelineDays = new Map<string, number[]>();
+    for (const s of stints) {
+      const arr = byPipelineDays.get(s.pipelineName) || [];
+      arr.push(s.days);
+      byPipelineDays.set(s.pipelineName, arr);
+    }
+    let worst: { name: string; avgDays: number } | null = null;
+    for (const [pname, days] of Array.from(byPipelineDays.entries())) {
+      if (days.length < 2) continue; // mínimo 2 muestras para que tenga sentido
+      const avg = days.reduce((s, v) => s + v, 0) / days.length;
+      if (!worst || avg > worst.avgDays) {
+        worst = { name: pname, avgDays: avg };
+      }
+    }
+    a.worstPipeline = worst;
+  }
+
+  return Array.from(map.values())
+    .filter((a) => a.currentOpen > 0 || a.totalTouchedQ2 > 0 || a.resolvedCount > 0)
+    .sort((a, b) => {
+      // Ordenar por carga actual + demorados
+      const sa = a.currentDelayed * 2 + a.currentOpen;
+      const sb = b.currentDelayed * 2 + b.currentOpen;
+      return sb - sa;
+    });
+}
