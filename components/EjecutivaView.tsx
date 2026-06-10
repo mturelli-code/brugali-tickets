@@ -11,7 +11,9 @@ import {
   inRange,
   fmtDate,
   buildAgentMetrics,
+  breakdownDelay,
 } from "@/lib/analytics";
+import { DELAY_COLORS, DELAY_LABELS } from "@/lib/hubspot";
 import KpiCard from "@/components/KpiCard";
 import WeeklyTrend from "@/components/WeeklyTrend";
 import Heatmap from "@/components/Heatmap";
@@ -303,6 +305,69 @@ export default function EjecutivaView({
           <KpiCard label="Alertas Calidad" value={alerts.length} tone="red" />
         </div>
       </section>
+
+      {/* Resumen de demoras */}
+      {(() => {
+        const allDelayed = q2Tickets.filter((t) => t.isDelayed);
+        if (allDelayed.length === 0) return null;
+        const bd = breakdownDelay(allDelayed);
+        return (
+          <section>
+            <h2 className="font-serif font-bold text-xl text-accent mb-4">Resumen de demoras Q2</h2>
+            <div className="bg-surface border border-border rounded-xl p-5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="rounded-xl bg-surface2 p-4 border-t-2 border-text">
+                  <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">Demorados totales</div>
+                  <div className="font-mono text-3xl font-semibold text-text mt-1">{bd.total}</div>
+                  <div className="text-[11px] text-muted">+ 7 días sin cerrar</div>
+                </div>
+                <div className="rounded-xl bg-surface2 p-4" style={{ borderTopWidth: 2, borderTopColor: DELAY_COLORS.internal_waiting, borderTopStyle: "solid" }}>
+                  <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">🔴 Bloqueados por otra área</div>
+                  <div className="font-mono text-3xl font-semibold mt-1" style={{ color: DELAY_COLORS.internal_waiting }}>{bd.internal_waiting}</div>
+                  <div className="text-[11px] text-muted">Necesitan escalamiento</div>
+                </div>
+                <div className="rounded-xl bg-surface2 p-4" style={{ borderTopWidth: 2, borderTopColor: DELAY_COLORS.internal_working, borderTopStyle: "solid" }}>
+                  <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">🟢 En el embudo</div>
+                  <div className="font-mono text-3xl font-semibold mt-1" style={{ color: DELAY_COLORS.internal_working }}>{bd.internal_working + bd.internal_unassigned}</div>
+                  <div className="text-[11px] text-muted">En progreso o sin asignar</div>
+                </div>
+                <div className="rounded-xl bg-surface2 p-4" style={{ borderTopWidth: 2, borderTopColor: DELAY_COLORS.external, borderTopStyle: "solid" }}>
+                  <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">🟠 Esperando local</div>
+                  <div className="font-mono text-3xl font-semibold mt-1" style={{ color: DELAY_COLORS.external }}>{bd.external}</div>
+                  <div className="text-[11px] text-muted">Pelota afuera de Brugali</div>
+                </div>
+              </div>
+              {/* Barra apilada */}
+              <div className="mt-4">
+                <div className="flex w-full h-3 rounded overflow-hidden bg-surface2">
+                  {(["internal_waiting", "internal_unassigned", "internal_working", "external"] as const).map((src) => {
+                    const n = bd[src];
+                    if (n === 0) return null;
+                    return (
+                      <div key={src} title={`${DELAY_LABELS[src]}: ${n}`} style={{ width: `${(n / bd.total) * 100}%`, backgroundColor: DELAY_COLORS[src] }} />
+                    );
+                  })}
+                </div>
+                <div className="flex flex-wrap gap-3 mt-2 text-[10px] text-muted">
+                  {(["internal_waiting", "internal_unassigned", "internal_working", "external"] as const).map((src) => {
+                    const n = bd[src];
+                    if (n === 0) return null;
+                    return (
+                      <span key={src} className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-sm" style={{ backgroundColor: DELAY_COLORS[src] }} />
+                        {DELAY_LABELS[src]}: <strong className="text-text">{n}</strong> ({Math.round((n / bd.total) * 100)}%)
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              <p className="text-[11px] text-dim mt-3">
+                El detalle ticket por ticket y a quién hay que empujar para cada uno está en la pestaña <strong>Seguimiento</strong>.
+              </p>
+            </div>
+          </section>
+        );
+      })()}
 
       {/* Tendencia Q2 (fijo) */}
       <section>
