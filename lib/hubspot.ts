@@ -524,6 +524,8 @@ export async function getOwnerHistory(ticketIds: string[]): Promise<OwnerHistory
   const ownersMap = await fetchOwners(token);
 
   const result: OwnerHistoryMap = new Map();
+  let firstError: string | null = null;
+
   // Limitar concurrencia para no saturar HubSpot rate limit
   const concurrent = 5;
   for (let i = 0; i < ticketIds.length; i += concurrent) {
@@ -536,7 +538,14 @@ export async function getOwnerHistory(ticketIds: string[]): Promise<OwnerHistory
             headers: { Authorization: `Bearer ${token}` },
             next: { revalidate: 600 },
           });
-          if (!res.ok) return;
+          if (!res.ok) {
+            if (!firstError) {
+              const txt = await res.text().catch(() => "");
+              firstError = `HubSpot history API ${res.status}: ${txt.slice(0, 300)}`;
+              console.warn(`[getOwnerHistory] ${firstError}`);
+            }
+            return;
+          }
           const data = await res.json();
           const history = data.propertiesWithHistory?.hubspot_owner_id || [];
           if (history.length === 0) return;
