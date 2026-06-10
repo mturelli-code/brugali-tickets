@@ -1,10 +1,11 @@
 "use client";
 import { useState, useMemo } from "react";
 import type { AreaMetrics } from "@/lib/analytics";
-import { fmtDate } from "@/lib/analytics";
-import type { Ticket } from "@/lib/hubspot";
+import { fmtDate, breakdownDelay } from "@/lib/analytics";
+import { DELAY_LABELS, DELAY_COLORS } from "@/lib/hubspot";
+import type { Ticket, DelaySource } from "@/lib/hubspot";
 
-type SortKey = "subject" | "branch" | "stage" | "created" | "lastActivity" | "days";
+type SortKey = "subject" | "branch" | "stage" | "created" | "lastActivity" | "days" | "daysInStage";
 
 export default function AreaSection({ area: a }: { area: AreaMetrics }) {
   const [expanded, setExpanded] = useState(false);
@@ -29,6 +30,8 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
     }
   }
 
+  const breakdown = useMemo(() => breakdownDelay(a.delayed), [a.delayed]);
+
   const sortedDelayed = useMemo(() => {
     const arr = [...a.delayed];
     arr.sort((x, y) => {
@@ -45,6 +48,8 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
           vx = x.createdAt.getTime(); vy = y.createdAt.getTime(); break;
         case "lastActivity":
           vx = x.daysSinceActivity; vy = y.daysSinceActivity; break;
+        case "daysInStage":
+          vx = x.daysInCurrentStage; vy = y.daysInCurrentStage; break;
         case "days":
           vx = x.daysOverdue ?? x.daysOpen;
           vy = y.daysOverdue ?? y.daysOpen;
@@ -176,6 +181,53 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
                   Cliqueá los encabezados para ordenar
                 </span>
               </div>
+
+              {/* Breakdown de tipo de demora */}
+              <div className="bg-surface2 rounded-lg p-3 mb-3">
+                <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-2">
+                  ¿De dónde viene la demora?
+                </div>
+                {/* Barra apilada */}
+                <div className="flex w-full h-2 rounded overflow-hidden bg-bg mb-2">
+                  {(["external", "internal_waiting", "internal_working", "internal_unassigned", "other"] as DelaySource[]).map((src) => {
+                    const n = breakdown[src];
+                    if (n === 0) return null;
+                    return (
+                      <div
+                        key={src}
+                        title={`${DELAY_LABELS[src]}: ${n}`}
+                        style={{ width: `${(n / breakdown.total) * 100}%`, backgroundColor: DELAY_COLORS[src] }}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                  {(["external", "internal_waiting", "internal_working", "internal_unassigned"] as DelaySource[]).map((src) => {
+                    const n = breakdown[src];
+                    if (n === 0) return null;
+                    const pct = Math.round((n / breakdown.total) * 100);
+                    return (
+                      <div key={src} className="flex items-center gap-1.5">
+                        <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: DELAY_COLORS[src] }} />
+                        <span className="text-muted">{DELAY_LABELS[src]}:</span>
+                        <strong className="font-mono text-text">{n}</strong>
+                        <span className="text-dim">({pct}%)</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {breakdown.externalPct >= 50 && (
+                  <div className="mt-2 text-[11px] text-brugaliorange font-medium">
+                    ⚠ El {breakdown.externalPct.toFixed(0)}% de los demorados están esperando a la sucursal/cliente — la demora no es del embudo.
+                  </div>
+                )}
+                {breakdown.internal_waiting >= 5 && (
+                  <div className="mt-2 text-[11px] text-brugalired font-medium">
+                    🚨 {breakdown.internal_waiting} tickets esperando respuesta interna Brugali — destrabar urgente.
+                  </div>
+                )}
+              </div>
+
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-surface2 text-muted uppercase tracking-wider">
@@ -184,8 +236,9 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
                       <Th col="branch" label="Sucursal" />
                       <Th col="stage" label="Etapa" />
                       <Th col="created" label="Ingresó" />
-                      <Th col="lastActivity" label="Última actividad" />
-                      <Th col="days" label="Días" right />
+                      <Th col="lastActivity" label="Últ. actividad" />
+                      <Th col="daysInStage" label="Días en etapa" right />
+                      <Th col="days" label="Días total" right />
                     </tr>
                   </thead>
                   <tbody>
@@ -202,6 +255,8 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
                           : t.daysSinceActivity === 1
                           ? "ayer"
                           : `hace ${t.daysSinceActivity}d`;
+                      const stageColor =
+                        DELAY_COLORS[t.delaySource] || "#6a6862";
                       return (
                         <tr key={t.id} className="border-t border-border">
                           <td className="py-2 px-3">
@@ -215,9 +270,19 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
                             </a>
                           </td>
                           <td className="py-2 px-3">{t.branch || "—"}</td>
-                          <td className="py-2 px-3">{t.stageLabel}</td>
+                          <td className="py-2 px-3">
+                            <span className="inline-flex items-center gap-1.5">
+                              <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: stageColor }} />
+                              {t.stageLabel}
+                            </span>
+                          </td>
                           <td className="py-2 px-3">{fmtDate(t.createdAt)}</td>
                           <td className={`py-2 px-3 font-medium ${actColor}`}>{actTxt}</td>
+                          <td className="py-2 px-3 text-right font-mono">
+                            <span className={t.daysInCurrentStage > 7 ? "text-brugalired font-semibold" : "text-muted"}>
+                              {t.daysInCurrentStage}d
+                            </span>
+                          </td>
                           <td className="py-2 px-3 text-right font-mono font-semibold text-brugalired">
                             {t.daysOverdue !== null
                               ? `${t.daysOverdue}d vencido`
