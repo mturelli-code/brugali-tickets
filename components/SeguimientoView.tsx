@@ -2,6 +2,7 @@
 import { useState, useMemo } from "react";
 import type { Ticket } from "@/lib/hubspot";
 import { buildFollowUpByOwner, fmtDate } from "@/lib/analytics";
+import LastUpdate from "@/components/LastUpdate";
 
 type SerializedTicket = Omit<
   Ticket,
@@ -47,7 +48,7 @@ function reasonTag(reason: string) {
 
 type UrgencyKey = "vencido" | "sin_respuesta" | "estancado";
 
-export default function SeguimientoView({ tickets: raw }: { tickets: SerializedTicket[] }) {
+export default function SeguimientoView({ tickets: raw, fetchedAt }: { tickets: SerializedTicket[]; fetchedAt: string }) {
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
   const today = new Date();
 
@@ -186,6 +187,7 @@ export default function SeguimientoView({ tickets: raw }: { tickets: SerializedT
           {totalTickets !== 1 ? "s" : ""} requieren atención · {finalByOwner.length} responsable
           {finalByOwner.length !== 1 ? "s" : ""}
         </p>
+        <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
 
       {/* PANEL DE FILTROS */}
