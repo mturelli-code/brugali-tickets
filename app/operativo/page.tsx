@@ -18,8 +18,7 @@ export default async function OperativoPage() {
     );
   }
 
-  // Tomar Q1 + Q2 para que el rango se pueda mover libremente.
-  // Las fechas se serializan a string al pasar de server a client.
+  const fetchedAt = new Date().toISOString();
   const serialized = allTickets.map((t) => ({
     ...t,
     createdAt: t.createdAt.toISOString(),
@@ -28,5 +27,5 @@ export default async function OperativoPage() {
     dueDate: t.dueDate ? t.dueDate.toISOString() : null,
   }));
 
-  return <OperativoView tickets={serialized} />;
+  return <OperativoView tickets={serialized} fetchedAt={fetchedAt} />;
 }
