@@ -67,6 +67,7 @@ export default function AgentesView({
   // Métricas profundas sobre Q2 completo
   const q2Tickets = useMemo(() => allTickets.filter((t) => t.quarter === 2), [allTickets]);
   const agents = useMemo(() => buildAgentDeepMetrics(q2Tickets, historyMap), [q2Tickets, historyMap]);
+  const hasHistory = historyMap.size > 0;
 
   const [sortKey, setSortKey] = useState<SortKey>("currentDelayed");
   const [asc, setAsc] = useState(false);
@@ -147,6 +148,11 @@ export default function AgentesView({
           Análisis de performance por responsable — tiempos, embudos donde se trabajan más, cuellos de botella.
         </p>
         <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
+        {!hasHistory && (
+          <div className="mt-3 bg-brugaliamber/10 border border-brugaliamber/30 rounded-lg px-4 py-2 text-xs text-brugaliamber">
+            ⚠ <strong>Métricas aproximadas:</strong> HubSpot no devolvió el historial de reasignaciones de los tickets. Las columnas <em>Días promedio sosteniendo</em> y <em>% &lt;2d</em> se calculan con el tiempo actual en etapa como aproximación. Para tener los datos reales, pedile al admin de HubSpot que active el permiso de <strong>"properties history"</strong> en la Service Key.
+          </div>
+        )}
       </div>
 
       {/* KPIs */}
