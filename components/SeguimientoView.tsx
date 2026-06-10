@@ -1,8 +1,8 @@
 "use client";
 import { useState, useMemo } from "react";
-import type { Ticket, DelaySource, OwnerHistoryMap } from "@/lib/hubspot";
+import type { Ticket, DelaySource } from "@/lib/hubspot";
 import { DELAY_COLORS, DELAY_LABELS } from "@/lib/hubspot";
-import { fmtDate, buildAgentMetrics } from "@/lib/analytics";
+import { fmtDate } from "@/lib/analytics";
 import LastUpdate from "@/components/LastUpdate";
 
 type SerializedTicket = Omit<
@@ -33,140 +33,152 @@ type SerializedHistoryEntry = {
   days: number;
 };
 
+type SerializedActivity = {
+  id: string;
+  type: string;
+  subject: string | null;
+  body: string | null;
+  assigneeOwnerId: string | null;
+  assigneeOwnerName: string | null;
+  timestamp: string;
+  status: string | null;
+};
+
+type EffectiveOwnerData = {
+  ownerId: string;
+  ownerName: string;
+  reason: string;
+  reasonText: string;
+  daysWaiting: number;
+};
+
+const ACTIVITY_ICON: Record<string, string> = {
+  task: "📋",
+  note: "📝",
+  email: "✉️",
+  call: "📞",
+  meeting: "📅",
+  other: "•",
+};
+
 export default function SeguimientoView({
   tickets: raw,
   fetchedAt,
   ownerHistory = {},
+  activities = {},
+  effectiveOwners = {},
 }: {
   tickets: SerializedTicket[];
   fetchedAt: string;
   ownerHistory?: Record<string, SerializedHistoryEntry[]>;
+  activities?: Record<string, SerializedActivity[]>;
+  effectiveOwners?: Record<string, EffectiveOwnerData>;
 }) {
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
-  const today = new Date();
 
-  // Solo Q2 + abiertos
-  const openTickets = useMemo(
-    () => allTickets.filter((t) => t.quarter === 2 && t.isOpen),
+  const delayedTickets = useMemo(
+    () =>
+      allTickets.filter(
+        (t) => t.quarter === 2 && t.isOpen && t.isDelayed
+      ),
     [allTickets]
   );
-
-  // Tickets demorados (foco de la vista)
-  const delayedTickets = useMemo(
-    () => openTickets.filter((t) => t.isDelayed),
-    [openTickets]
-  );
-
-  // Hidratar history
-  const historyMap: OwnerHistoryMap = useMemo(() => {
-    const m: OwnerHistoryMap = new Map();
-    for (const [ticketId, entries] of Object.entries(ownerHistory)) {
-      m.set(
-        ticketId,
-        entries.map((e) => ({
-          ownerId: e.ownerId,
-          ownerName: e.ownerName,
-          start: new Date(e.start),
-          end: e.end ? new Date(e.end) : null,
-          days: e.days,
-        }))
-      );
-    }
-    return m;
-  }, [ownerHistory]);
 
   // FILTROS
   const [search, setSearch] = useState("");
   const [activeArea, setActiveArea] = useState<string | null>(null);
-  const [activeBranch, setActiveBranch] = useState<string | null>(null);
+  const [activeOriginEmbudo, setActiveOriginEmbudo] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<DelaySource | null>(null);
+  const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null);
 
-  // Catálogos
-  const areas = useMemo(() => {
+  const areasOrigin = useMemo(() => {
     const s = new Set<string>();
     for (const t of delayedTickets) s.add(t.pipelineName);
     return Array.from(s).sort();
   }, [delayedTickets]);
 
-  const branches = useMemo(() => {
-    const s = new Set<string>();
-    for (const t of delayedTickets) if (t.branch) s.add(t.branch);
-    return Array.from(s).sort();
-  }, [delayedTickets]);
-
   // Aplicar filtros
-  const filtered = useMemo(() => {
+  const filteredTickets = useMemo(() => {
     let arr = delayedTickets;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      arr = arr.filter(
-        (t) =>
+      arr = arr.filter((t) => {
+        const eff = effectiveOwners[t.id];
+        return (
           t.subject.toLowerCase().includes(q) ||
           (t.branch && t.branch.toLowerCase().includes(q)) ||
-          (t.ownerName && t.ownerName.toLowerCase().includes(q))
-      );
+          (eff && eff.ownerName.toLowerCase().includes(q))
+        );
+      });
     }
-    if (activeArea) arr = arr.filter((t) => t.pipelineName === activeArea);
-    if (activeBranch) arr = arr.filter((t) => t.branch === activeBranch);
+    if (activeOriginEmbudo) arr = arr.filter((t) => t.pipelineName === activeOriginEmbudo);
     if (activeCategory) arr = arr.filter((t) => t.delaySource === activeCategory);
     return arr;
-  }, [delayedTickets, search, activeArea, activeBranch, activeCategory]);
+  }, [delayedTickets, search, activeOriginEmbudo, activeCategory, effectiveOwners]);
 
-  // Particionar por categoría de demora
-  const buckets = useMemo(() => {
-    const b: Record<DelaySource, Ticket[]> = {
-      internal_waiting: [],
-      internal_unassigned: [],
-      internal_working: [],
-      external: [],
-      other: [],
-    };
-    for (const t of filtered) b[t.delaySource].push(t);
-    // Ordenar cada bucket por días en etapa desc
-    for (const k of Object.keys(b) as DelaySource[]) {
-      b[k].sort((a, z) => z.daysInCurrentStage - a.daysInCurrentStage);
+  // Agrupar por responsable efectivo
+  const groupedByResponsable = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        ownerId: string;
+        ownerName: string;
+        tickets: Ticket[];
+        // Distribución por embudo origen
+        byOriginEmbudo: Record<string, number>;
+      }
+    >();
+    for (const t of filteredTickets) {
+      const eff = effectiveOwners[t.id];
+      const key = eff ? eff.ownerId : (t.ownerId ?? "__sin__");
+      const name = eff ? eff.ownerName : (t.ownerName ?? "Sin asignar");
+      let g = map.get(key);
+      if (!g) {
+        g = { ownerId: key, ownerName: name, tickets: [], byOriginEmbudo: {} };
+        map.set(key, g);
+      }
+      g.tickets.push(t);
+      g.byOriginEmbudo[t.pipelineName] = (g.byOriginEmbudo[t.pipelineName] || 0) + 1;
     }
-    return b;
-  }, [filtered]);
-
-  // Counts globales (sobre todos los demorados, no filtrados — para los KPIs arriba)
-  const totalCounts = useMemo(() => {
-    const c = { total: 0, external: 0, internal_waiting: 0, internal_working: 0, internal_unassigned: 0, other: 0 };
-    for (const t of delayedTickets) {
-      c.total++;
-      c[t.delaySource]++;
+    // Ordenar tickets dentro de cada grupo por días de espera del responsable
+    for (const g of Array.from(map.values())) {
+      g.tickets.sort((a, b) => {
+        const da = effectiveOwners[a.id]?.daysWaiting ?? a.daysOpen;
+        const db = effectiveOwners[b.id]?.daysWaiting ?? b.daysOpen;
+        return db - da;
+      });
     }
-    return c;
-  }, [delayedTickets]);
+    return Array.from(map.values()).sort((a, b) => b.tickets.length - a.tickets.length);
+  }, [filteredTickets, effectiveOwners]);
 
-  // Agente metrics (sobre Q2 + history)
-  const agents = useMemo(
-    () => buildAgentMetrics(allTickets.filter((t) => t.quarter === 2), historyMap).slice(0, 8),
-    [allTickets, historyMap]
-  );
+  // Filtro adicional: si activeArea está set, filtrar grupos
+  const finalGroups = useMemo(() => {
+    if (!activeArea) return groupedByResponsable;
+    return groupedByResponsable.filter((g) => g.ownerId === activeArea);
+  }, [groupedByResponsable, activeArea]);
 
-  const hasFilters = !!search || activeArea || activeBranch || activeCategory;
+  const totalTickets = finalGroups.reduce((s, g) => s + g.tickets.length, 0);
+  const hasFilters = !!search || !!activeArea || !!activeOriginEmbudo || !!activeCategory;
   function clearFilters() {
     setSearch("");
     setActiveArea(null);
-    setActiveBranch(null);
+    setActiveOriginEmbudo(null);
     setActiveCategory(null);
   }
 
   function Chip({
-    active, onClick, children, color,
+    active, onClick, children,
   }: {
     active: boolean;
     onClick: () => void;
     children: React.ReactNode;
-    color?: string;
   }) {
     return (
       <button
         onClick={onClick}
         className={`px-3 py-1 text-xs rounded-full border transition-colors ${
           active
-            ? `${color ?? "bg-accent border-accent"} text-white font-semibold`
+            ? "bg-accent text-white border-accent font-semibold"
             : "border-border text-muted hover:border-accent hover:text-accent"
         }`}
       >
@@ -175,92 +187,157 @@ export default function SeguimientoView({
     );
   }
 
-  function TicketRow({ t }: { t: Ticket }) {
-    const sourceColor = DELAY_COLORS[t.delaySource];
-    const stageDaysTone =
-      t.daysInCurrentStage > 14 ? "text-brugalired"
-      : t.daysInCurrentStage > 7 ? "text-brugaliamber"
-      : "text-text";
+  function TimelineEntry({ children, color }: { children: React.ReactNode; color: string }) {
     return (
-      <div className="px-4 py-3 border-t border-border first:border-t-0 hover:bg-surface2/40 transition-colors">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: sourceColor }} />
+      <div className="flex gap-3 text-xs">
+        <div className="flex flex-col items-center flex-shrink-0">
+          <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
+          <div className="w-px flex-1 bg-border" />
+        </div>
+        <div className="pb-3 flex-1 min-w-0">{children}</div>
+      </div>
+    );
+  }
+
+  function TicketCard({ t }: { t: Ticket }) {
+    const eff = effectiveOwners[t.id];
+    const isExpanded = expandedTicketId === t.id;
+    const sourceColor = DELAY_COLORS[t.delaySource];
+    const history = ownerHistory[t.id] || [];
+    const acts = activities[t.id] || [];
+
+    const reasonBadge =
+      eff?.reason === "last_assigned_task" ? "📋 Tarea pendiente"
+      : eff?.reason === "last_assigned_note" ? "📝 Última actividad"
+      : eff?.reason === "current_ticket_owner" ? "👤 Responsable actual"
+      : "🚨 Sin asignar";
+
+    return (
+      <div className="border-t border-border first:border-t-0">
+        <button
+          onClick={() => setExpandedTicketId(isExpanded ? null : t.id)}
+          className="w-full text-left px-4 py-3 hover:bg-surface2/40 transition-colors"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-[10px] transition-transform inline-block font-mono ${isExpanded ? "rotate-90" : ""}`}>▶</span>
+                <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: sourceColor }} />
+                <span className="font-medium text-sm">{t.subject}</span>
+                {t.branch && (
+                  <span className="text-[11px] bg-surface2 text-muted px-2 py-0.5 rounded-full">{t.branch}</span>
+                )}
+                <span className="text-[11px] text-muted">{t.pipelineName}</span>
+              </div>
+              <div className="text-[11px] text-muted mt-1 ml-6">
+                {reasonBadge} · Etapa: <strong>{t.stageLabel}</strong> · Ingresó {fmtDate(t.createdAt)}
+                {eff?.reason !== "unassigned" && (
+                  <> · Lleva <strong className="text-text">{eff?.daysWaiting ?? 0}d</strong> esperando</>
+                )}
+              </div>
+              {eff?.reason === "last_assigned_task" && (
+                <div className="text-[11px] text-brugaliamber mt-1 ml-6 italic">
+                  {eff.reasonText}
+                </div>
+              )}
+            </div>
+            <div className="text-right flex-shrink-0">
+              <div className="font-mono font-semibold text-sm text-brugalired">
+                {t.daysOverdue !== null ? `${t.daysOverdue}d vencido` : `${t.daysOpen}d abierto`}
+              </div>
+              <div className="text-[10px] text-dim">
+                {t.daysInCurrentStage}d en etapa actual
+              </div>
+            </div>
+          </div>
+        </button>
+
+        {isExpanded && (
+          <div className="px-6 py-4 bg-surface2/30 border-t border-border">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Timeline de owners */}
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-3">
+                  📍 Por dónde pasó el ticket
+                </div>
+                {history.length === 0 ? (
+                  <div className="text-xs text-muted">Sin historial disponible</div>
+                ) : (
+                  <div className="space-y-0">
+                    {history.map((entry, i) => (
+                      <TimelineEntry key={`${entry.ownerId}-${entry.start}`} color="#254957">
+                        <div className="font-medium text-sm">{entry.ownerName}</div>
+                        <div className="text-[10px] text-muted">
+                          {fmtDate(new Date(entry.start))} {entry.end ? `→ ${fmtDate(new Date(entry.end))}` : "→ hoy"}
+                          {" · "}
+                          <strong className="text-text">{entry.days}d</strong>
+                          {i === history.length - 1 && (
+                            <span className="ml-2 text-[10px] text-brugaliorange font-semibold">Actual</span>
+                          )}
+                        </div>
+                      </TimelineEntry>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Actividades */}
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-3">
+                  💬 Últimas actividades del ticket
+                </div>
+                {acts.length === 0 ? (
+                  <div className="text-xs text-muted">Sin actividades registradas</div>
+                ) : (
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-2">
+                    {acts.slice(0, 8).map((a) => (
+                      <div key={a.id} className="text-xs border-l-2 border-border pl-3 py-1">
+                        <div className="flex items-center gap-1.5">
+                          <span>{ACTIVITY_ICON[a.type] || "•"}</span>
+                          <span className="text-muted text-[10px] uppercase tracking-wider">{a.type}</span>
+                          {a.status && a.status !== "COMPLETED" && (
+                            <span className="bg-brugaliamber/10 text-brugaliamber px-1.5 rounded text-[10px]">
+                              {a.status}
+                            </span>
+                          )}
+                          {a.status === "COMPLETED" && (
+                            <span className="bg-brugaligreen/10 text-brugaligreen px-1.5 rounded text-[10px]">
+                              ✓ completada
+                            </span>
+                          )}
+                        </div>
+                        {a.subject && <div className="font-medium mt-0.5">{a.subject}</div>}
+                        {a.body && a.body.length > 0 && (
+                          <div className="text-muted mt-0.5 text-[11px] line-clamp-2">{a.body}</div>
+                        )}
+                        <div className="text-dim text-[10px] mt-0.5">
+                          {fmtDate(new Date(a.timestamp))}
+                          {a.assigneeOwnerName && <> · asignado a <strong>{a.assigneeOwnerName}</strong></>}
+                        </div>
+                      </div>
+                    ))}
+                    {acts.length > 8 && (
+                      <div className="text-[10px] text-dim">
+                        + {acts.length - 8} actividades más — abrí en HubSpot para ver todas
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4 flex justify-end">
               <a
                 href={t.hubspotUrl}
                 target="_blank"
                 rel="noopener"
-                className="font-medium text-sm text-accent underline decoration-dotted hover:text-brugaliorange"
+                className="text-xs text-accent border border-accent/30 hover:bg-accent hover:text-white px-3 py-1.5 rounded-full transition-colors"
               >
-                {t.subject}
+                Abrir ticket completo en HubSpot →
               </a>
-              {t.branch && (
-                <span className="text-[11px] bg-surface2 text-muted px-2 py-0.5 rounded-full">{t.branch}</span>
-              )}
-              <span className="text-[11px] text-muted">{t.pipelineName}</span>
-            </div>
-            <div className="text-[11px] text-muted mt-1">
-              Etapa: <strong>{t.stageLabel}</strong>
-              {" · "}
-              Responsable: <strong>{t.ownerName ?? "Sin asignar"}</strong>
-              {" · "}
-              Ingresó {fmtDate(t.createdAt)}
             </div>
           </div>
-          <div className="text-right flex-shrink-0">
-            <div className={`font-mono font-semibold text-sm ${stageDaysTone}`}>
-              {t.daysInCurrentStage}d en etapa
-            </div>
-            <div className="text-[10px] text-dim">
-              {t.daysOverdue !== null ? `${t.daysOverdue}d vencido` : `${t.daysOpen}d abiertos`}
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function Bucket({
-    title, source, accent, description, priority,
-  }: {
-    title: string;
-    source: DelaySource;
-    accent: string;
-    description: string;
-    priority: "critical" | "informational";
-  }) {
-    const tickets = buckets[source];
-    if (tickets.length === 0) return null;
-
-    return (
-      <div className={`bg-surface border-2 rounded-xl overflow-hidden ${priority === "critical" ? "border-brugalired" : "border-border"}`}>
-        <div className={`px-5 py-4 ${priority === "critical" ? "bg-brugalired/5" : "bg-surface2"}`}>
-          <div className="flex items-baseline justify-between gap-3 flex-wrap">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: accent }} />
-                <h3 className="font-serif font-bold text-base" style={{ color: accent }}>{title}</h3>
-                <span className="text-xs text-muted">({tickets.length} ticket{tickets.length !== 1 ? "s" : ""})</span>
-              </div>
-              <p className="text-xs text-muted mt-1">{description}</p>
-            </div>
-          </div>
-        </div>
-        <div className="max-h-[400px] overflow-y-auto">
-          {tickets.map((t) => <TicketRow key={t.id} t={t} />)}
-        </div>
-      </div>
-    );
-  }
-
-  // KPI helper
-  function Kpi({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color: string }) {
-    return (
-      <div className="rounded-xl border border-border p-4 bg-surface" style={{ borderTopWidth: 3, borderTopColor: color }}>
-        <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1.5">{label}</div>
-        <div className="font-mono text-3xl font-semibold" style={{ color }}>{value}</div>
-        {sub && <div className="text-[11px] text-muted mt-1">{sub}</div>}
+        )}
       </div>
     );
   }
@@ -271,47 +348,12 @@ export default function SeguimientoView({
       <div>
         <h1 className="font-serif font-bold text-3xl text-accent">Seguimiento</h1>
         <p className="text-sm text-muted mt-1">
-          Tickets demorados clasificados por dónde está la traba real.
+          Tickets demorados agrupados por <strong>responsable efectivo</strong> — a quién hay que empujar para que actúe.
         </p>
         <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
 
-      {/* KPIs de panorama */}
-      <section>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <Kpi
-            label="Demorados totales"
-            value={totalCounts.total}
-            sub="+ 7 días sin cerrar"
-            color="#1d1d1b"
-          />
-          <Kpi
-            label="🔴 Bloqueados por otra área"
-            value={totalCounts.internal_waiting}
-            sub="Esperando escalamiento a otra área Brugali"
-            color={DELAY_COLORS.internal_waiting}
-          />
-          <Kpi
-            label="🟢 En progreso"
-            value={totalCounts.internal_working + totalCounts.internal_unassigned}
-            sub="Dentro del embudo (en proceso o sin asignar)"
-            color={DELAY_COLORS.internal_working}
-          />
-          <Kpi
-            label="🟠 Esperando local"
-            value={totalCounts.external}
-            sub="Pelota afuera de Brugali"
-            color={DELAY_COLORS.external}
-          />
-        </div>
-        {totalCounts.internal_waiting > 0 && (
-          <div className="mt-3 text-xs text-brugalired font-medium">
-            🚨 Hay <strong>{totalCounts.internal_waiting}</strong> tickets bloqueados esperando que otra área de Brugali actúe — el responsable del embudo no puede destrabarlos solo, hay que escalar.
-          </div>
-        )}
-      </section>
-
-      {/* PANEL DE FILTROS */}
+      {/* FILTROS */}
       <div className="bg-surface border border-border rounded-xl p-4 space-y-3">
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[200px] max-w-md">
@@ -343,7 +385,6 @@ export default function SeguimientoView({
               key={src}
               active={activeCategory === src}
               onClick={() => setActiveCategory(activeCategory === src ? null : src)}
-              color={`border-2`}
             >
               <span className="inline-block w-2 h-2 rounded-sm mr-1.5 align-middle" style={{ backgroundColor: DELAY_COLORS[src] }} />
               {DELAY_LABELS[src]}
@@ -351,16 +392,16 @@ export default function SeguimientoView({
           ))}
         </div>
 
-        {/* Área */}
-        {areas.length > 0 && (
+        {/* Embudo origen */}
+        {areasOrigin.length > 0 && (
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Área:</span>
-            <Chip active={activeArea === null} onClick={() => setActiveArea(null)}>Todas</Chip>
-            {areas.map((area) => (
+            <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Embudo origen:</span>
+            <Chip active={activeOriginEmbudo === null} onClick={() => setActiveOriginEmbudo(null)}>Todos</Chip>
+            {areasOrigin.map((area) => (
               <Chip
                 key={area}
-                active={activeArea === area}
-                onClick={() => setActiveArea(activeArea === area ? null : area)}
+                active={activeOriginEmbudo === area}
+                onClick={() => setActiveOriginEmbudo(activeOriginEmbudo === area ? null : area)}
               >
                 {area}
               </Chip>
@@ -368,39 +409,17 @@ export default function SeguimientoView({
           </div>
         )}
 
-        {/* Sucursal */}
-        {branches.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Sucursal:</span>
-            <Chip active={activeBranch === null} onClick={() => setActiveBranch(null)}>Todas</Chip>
-            {branches.slice(0, 12).map((b) => (
-              <Chip
-                key={b}
-                active={activeBranch === b}
-                onClick={() => setActiveBranch(activeBranch === b ? null : b)}
-              >
-                {b}
-              </Chip>
-            ))}
-            {branches.length > 12 && (
-              <span className="text-[10px] text-dim self-center">+{branches.length - 12} más — usá el buscador</span>
-            )}
-          </div>
-        )}
-
         <div className="text-[11px] text-muted">
-          Mostrando <strong className="text-text font-semibold font-mono">{filtered.length}</strong> de {delayedTickets.length} tickets demorados
+          <strong className="font-mono text-text">{totalTickets}</strong> ticket{totalTickets !== 1 ? "s" : ""} agrupado{totalTickets !== 1 ? "s" : ""} en <strong className="font-mono text-text">{finalGroups.length}</strong> responsable{finalGroups.length !== 1 ? "s" : ""} a empujar
         </div>
       </div>
 
-      {/* Buckets en orden de prioridad */}
-      {filtered.length === 0 ? (
+      {/* Grupos */}
+      {finalGroups.length === 0 ? (
         <div className="bg-surface border border-brugaligreen rounded-xl p-8 text-center">
           <div className="text-brugaligreen text-3xl mb-2">✓</div>
           <div className="font-semibold text-brugaligreen">
-            {hasFilters
-              ? "Ningún ticket demorado cumple los filtros aplicados."
-              : "Sin tickets demorados. ¡Felicitaciones!"}
+            {hasFilters ? "Ningún ticket cumple los filtros aplicados." : "Sin tickets demorados. ¡Felicitaciones!"}
           </div>
           {hasFilters && (
             <button onClick={clearFilters} className="mt-3 text-accent underline text-sm">
@@ -409,93 +428,44 @@ export default function SeguimientoView({
           )}
         </div>
       ) : (
-        <div className="space-y-5">
-          <Bucket
-            title="Bloqueados por otra área Brugali"
-            source="internal_waiting"
-            accent={DELAY_COLORS.internal_waiting}
-            description="Estos tickets dependen de otra área de Brugali (Compras, IT, Logística, Gerencia, etc.) que tiene que actuar. El responsable del embudo no puede destrabarlos solo: hay que escalar al área correspondiente. Acción típica: identificar qué área traba y mandar mail/llamado."
-            priority="critical"
-          />
-          <Bucket
-            title="Sin asignar dentro del embudo"
-            source="internal_unassigned"
-            accent={DELAY_COLORS.internal_unassigned}
-            description="Nadie del embudo agarró estos tickets todavía. Asignar responsable ahora."
-            priority="critical"
-          />
-          <Bucket
-            title="En progreso dentro del embudo"
-            source="internal_working"
-            accent={DELAY_COLORS.internal_working}
-            description="El responsable del embudo está activamente trabajándolos. Si llevan más de 14 días en etapa, consultarle qué los traba."
-            priority="informational"
-          />
-          <Bucket
-            title="Esperando a la sucursal/cliente"
-            source="external"
-            accent={DELAY_COLORS.external}
-            description="La pelota está afuera de Brugali. Útil para que la ejecutiva de cuenta llame al local. No es responsabilidad del embudo, pero conviene seguimiento."
-            priority="informational"
-          />
-        </div>
-      )}
+        <div className="space-y-4">
+          {finalGroups.map((g) => {
+            const breakdownByOrigin = Object.entries(g.byOriginEmbudo).sort((a, b) => b[1] - a[1]);
+            return (
+              <div key={g.ownerId} className="bg-surface border border-border rounded-xl overflow-hidden">
+                {/* Header del grupo */}
+                <div className="bg-surface2 px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-accent/10 text-accent flex items-center justify-center font-bold flex-shrink-0">
+                      {g.ownerName.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="font-semibold text-base">{g.ownerName}</div>
+                      <div className="text-[11px] text-muted">
+                        Hay que empujarlo/a por <strong>{g.tickets.length}</strong> ticket{g.tickets.length !== 1 ? "s" : ""}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[11px]">
+                    {breakdownByOrigin.map(([area, n]) => (
+                      <span
+                        key={area}
+                        className="bg-bg border border-border px-2 py-1 rounded-full font-mono"
+                      >
+                        {area}: <strong>{n}</strong>
+                      </span>
+                    ))}
+                  </div>
+                </div>
 
-      {/* Por agente */}
-      {agents.length > 0 && (
-        <section>
-          <h2 className="font-serif font-bold text-xl text-accent mb-3">Por agente — quién sostiene más demorados</h2>
-          <div className="bg-surface border border-border rounded-xl overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-surface2 text-muted uppercase tracking-wider text-xs">
-                <tr>
-                  <th className="text-left py-3 px-3">Agente</th>
-                  <th className="text-right py-3 px-3">Carga actual</th>
-                  <th className="text-right py-3 px-3">Demorados</th>
-                  <th className="text-right py-3 px-3">Días promedio sosteniendo</th>
-                  <th className="text-right py-3 px-3">Tiempo resolución</th>
-                </tr>
-              </thead>
-              <tbody>
-                {agents.map((a) => {
-                  const delayedTone =
-                    a.totalDelayed >= 5 ? "text-brugalired"
-                    : a.totalDelayed >= 2 ? "text-brugaliamber"
-                    : "text-muted";
-                  const holdingTone =
-                    (a.avgDaysHolding ?? 0) > 10 ? "text-brugalired font-semibold"
-                    : (a.avgDaysHolding ?? 0) > 5 ? "text-brugaliamber"
-                    : "text-text";
-                  return (
-                    <tr key={a.ownerId} className="border-t border-border">
-                      <td className="py-2 px-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-7 h-7 rounded-full bg-accent/10 text-accent flex items-center justify-center font-bold text-xs flex-shrink-0">
-                            {a.ownerName.charAt(0).toUpperCase()}
-                          </div>
-                          <span className="font-medium">{a.ownerName}</span>
-                        </div>
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono font-semibold">{a.totalOpen}</td>
-                      <td className={`py-2 px-3 text-right font-mono font-semibold ${delayedTone}`}>
-                        {a.totalDelayed || "—"}
-                      </td>
-                      <td className={`py-2 px-3 text-right font-mono ${holdingTone}`}>
-                        {a.avgDaysHolding !== null ? `${a.avgDaysHolding.toFixed(1)}d` : "—"}
-                      </td>
-                      <td className="py-2 px-3 text-right font-mono text-muted">
-                        {a.avgResolutionDays !== null ? `${a.avgResolutionDays.toFixed(1)}d` : "—"}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          <p className="text-[11px] text-dim mt-2">
-            <strong>Días promedio sosteniendo</strong>: cuánto se sienta el agente sobre un ticket demorado antes de soltarlo o cerrarlo (basado en historial real de reasignación). Si está en rojo, vale la pena conversación uno a uno.
-          </p>
-        </section>
+                {/* Tickets */}
+                <div>
+                  {g.tickets.map((t) => <TicketCard key={t.id} t={t} />)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
