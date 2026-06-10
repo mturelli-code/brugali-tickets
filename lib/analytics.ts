@@ -1,4 +1,4 @@
-import { Ticket, PIPELINE_ORDER, PIPELINES } from "./hubspot";
+import { Ticket, PIPELINE_ORDER, PIPELINES, DelaySource, DELAY_LABELS, OwnerHistoryMap } from "./hubspot";
 
 export interface QuarterAreaStats {
   name: string;
@@ -420,3 +420,137 @@ export function fmtDate(d: Date): string {
   const m = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
   return `${d.getUTCDate()}-${m[d.getUTCMonth()]}`;
 }
+
+// =================== ANÁLISIS DE DEMORA (interna vs externa) ===================
+
+export interface DelayBreakdown {
+  total: number;
+  external: number;
+  internal_waiting: number;
+  internal_working: number;
+  internal_unassigned: number;
+  other: number;
+  // % de demora que es externa (no responsabilidad del embudo)
+  externalPct: number;
+}
+
+export function breakdownDelay(tickets: Ticket[]): DelayBreakdown {
+  const out: DelayBreakdown = {
+    total: 0,
+    external: 0,
+    internal_waiting: 0,
+    internal_working: 0,
+    internal_unassigned: 0,
+    other: 0,
+    externalPct: 0,
+  };
+  for (const t of tickets) {
+    out.total++;
+    out[t.delaySource]++;
+  }
+  out.externalPct = out.total > 0 ? (out.external / out.total) * 100 : 0;
+  return out;
+}
+
+// =================== MÉTRICAS POR AGENTE ===================
+
+export interface AgentMetrics {
+  ownerId: string;
+  ownerName: string;
+  totalOpen: number;        // tickets abiertos asignados ahora
+  totalDelayed: number;     // demorados asignados
+  totalClosedQ2: number;    // cerrados en Q2 (cuántos resolvió)
+  avgResolutionDays: number | null; // promedio de días en cerrar (sobre cerrados Q2)
+  // Sobre la base de history
+  avgDaysHolding: number | null; // promedio que estuvo "sentado" sobre tickets demorados
+  totalDaysAccumulated: number;  // suma de días que tuvo todos los demorados
+  ticketsTouched: number;        // cuántos demorados distintos pasaron por sus manos
+}
+
+export function buildAgentMetrics(
+  tickets: Ticket[],
+  history?: OwnerHistoryMap
+): AgentMetrics[] {
+  const map = new Map<string, AgentMetrics>();
+
+  function getOrCreate(id: string, name: string): AgentMetrics {
+    let a = map.get(id);
+    if (!a) {
+      a = {
+        ownerId: id,
+        ownerName: name,
+        totalOpen: 0,
+        totalDelayed: 0,
+        totalClosedQ2: 0,
+        avgResolutionDays: null,
+        avgDaysHolding: null,
+        totalDaysAccumulated: 0,
+        ticketsTouched: 0,
+      };
+      map.set(id, a);
+    }
+    return a;
+  }
+
+  // Estado actual: owner asignado
+  for (const t of tickets) {
+    const key = t.ownerId ?? "__sin__";
+    const name = t.ownerName ?? "Sin asignar";
+    const a = getOrCreate(key, name);
+    if (t.isOpen) a.totalOpen++;
+    if (t.isDelayed) a.totalDelayed++;
+    if (t.isClosed && t.quarter === 2) {
+      a.totalClosedQ2++;
+    }
+  }
+
+  // Tiempo promedio resolución por owner (sobre cerrados Q2)
+  const resolutionsByOwner = new Map<string, number[]>();
+  for (const t of tickets) {
+    if (t.isClosed && t.quarter === 2 && t.closedAt) {
+      const key = t.ownerId ?? "__sin__";
+      const days = (t.closedAt.getTime() - t.createdAt.getTime()) / 86400000;
+      const arr = resolutionsByOwner.get(key) || [];
+      arr.push(days);
+      resolutionsByOwner.set(key, arr);
+    }
+  }
+  for (const [key, arr] of Array.from(resolutionsByOwner.entries())) {
+    if (arr.length === 0) continue;
+    const a = map.get(key);
+    if (!a) continue;
+    a.avgResolutionDays = arr.reduce((s, v) => s + v, 0) / arr.length;
+  }
+
+  // History — para los tickets demorados que tienen historial
+  if (history) {
+    const accumByOwner = new Map<string, { totalDays: number; tickets: Set<string> }>();
+    for (const t of tickets) {
+      if (!t.isDelayed) continue;
+      const entries = history.get(t.id);
+      if (!entries || entries.length === 0) continue;
+      for (const entry of entries) {
+        const cur = accumByOwner.get(entry.ownerId) || { totalDays: 0, tickets: new Set<string>() };
+        cur.totalDays += entry.days;
+        cur.tickets.add(t.id);
+        accumByOwner.set(entry.ownerId, cur);
+      }
+    }
+    for (const [ownerId, data] of Array.from(accumByOwner.entries())) {
+      const a = map.get(ownerId);
+      if (!a) continue;
+      a.totalDaysAccumulated = data.totalDays;
+      a.ticketsTouched = data.tickets.size;
+      a.avgDaysHolding = data.tickets.size > 0 ? data.totalDays / data.tickets.size : null;
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    // Ordenar por demorados primero, después por abiertos
+    if (b.totalDelayed !== a.totalDelayed) return b.totalDelayed - a.totalDelayed;
+    return b.totalOpen - a.totalOpen;
+  });
+}
+
+export { DELAY_LABELS };
+export type { DelaySource };
