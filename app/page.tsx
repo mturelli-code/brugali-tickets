@@ -1,4 +1,5 @@
 import { getAllTickets, getOwnerHistory } from "@/lib/hubspot";
+import type { OwnerHistoryMap } from "@/lib/hubspot";
 import EjecutivaView from "@/components/EjecutivaView";
 
 export const revalidate = 600;
@@ -25,7 +26,7 @@ export default async function ExecPage() {
 
   // Solo bajamos historial de owners para tickets DEMORADOS — son los que importan
   const delayedIds = allTickets.filter((t) => t.isDelayed).map((t) => t.id);
-  let historyMap;
+  let historyMap: OwnerHistoryMap = new Map();
   try {
     historyMap = await getOwnerHistory(delayedIds);
   } catch {
