@@ -1,4 +1,4 @@
-import { getAllTickets } from "@/lib/hubspot";
+import { getAllTickets, getOwnerHistory } from "@/lib/hubspot";
 import SeguimientoView from "@/components/SeguimientoView";
 
 export const revalidate = 600;
@@ -19,6 +19,26 @@ export default async function AlertasPage() {
   }
 
   const fetchedAt = new Date().toISOString();
+
+  // Historial de owners para los demorados (para métricas por agente)
+  const delayedIds = allTickets.filter((t) => t.isDelayed).map((t) => t.id);
+  let historyMap;
+  try {
+    historyMap = await getOwnerHistory(delayedIds);
+  } catch {
+    historyMap = new Map();
+  }
+  const history: Record<string, { ownerId: string; ownerName: string; start: string; end: string | null; days: number }[]> = {};
+  for (const [ticketId, entries] of Array.from(historyMap.entries())) {
+    history[ticketId] = entries.map((e) => ({
+      ownerId: e.ownerId,
+      ownerName: e.ownerName,
+      start: e.start.toISOString(),
+      end: e.end ? e.end.toISOString() : null,
+      days: e.days,
+    }));
+  }
+
   const serialized = allTickets.map((t) => ({
     ...t,
     createdAt: t.createdAt.toISOString(),
@@ -27,5 +47,5 @@ export default async function AlertasPage() {
     dueDate: t.dueDate ? t.dueDate.toISOString() : null,
   }));
 
-  return <SeguimientoView tickets={serialized} fetchedAt={fetchedAt} />;
+  return <SeguimientoView tickets={serialized} fetchedAt={fetchedAt} ownerHistory={history} />;
 }
