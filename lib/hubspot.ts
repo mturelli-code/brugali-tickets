@@ -71,8 +71,51 @@ export interface RawTicket {
     nombre_sucursal?: string;
     nombre_producto?: string;
     hubspot_owner_id?: string;
+    hs_v2_date_entered_current_stage?: string;
+    hs_v2_time_in_current_stage?: string;
   };
 }
+
+// Clasificación de quién traba el ticket según etapa actual
+export type DelaySource =
+  | "external"          // Esperando respuesta del cliente/sucursal
+  | "internal_waiting"  // Esperando respuesta interna Brugali
+  | "internal_working"  // En progreso (alguien lo está trabajando)
+  | "internal_unassigned" // Nuevo sin asignar
+  | "other";
+
+export function classifyDelay(stageLabel: string): DelaySource {
+  const s = stageLabel.toLowerCase();
+  if (s.includes("esp. resp. cliente") || s.includes("respuesta del cliente") || s.includes("respuesta de cliente")) {
+    return "external";
+  }
+  if (s.includes("esp. resp. interna") || s.includes("respuesta interna")) {
+    return "internal_waiting";
+  }
+  if (s.includes("en progreso") || s.includes("en proceso")) {
+    return "internal_working";
+  }
+  if (s.includes("nuevo")) {
+    return "internal_unassigned";
+  }
+  return "other";
+}
+
+export const DELAY_LABELS: Record<DelaySource, string> = {
+  external: "Esperando respuesta de la sucursal/cliente",
+  internal_waiting: "Esperando respuesta interna Brugali",
+  internal_working: "En progreso (Brugali está trabajándolo)",
+  internal_unassigned: "Sin asignar (Brugali no lo agarró aún)",
+  other: "Otra",
+};
+
+export const DELAY_COLORS: Record<DelaySource, string> = {
+  external: "#f07e26",          // orange — depende del local
+  internal_waiting: "#e63323",  // red — interno bloqueado
+  internal_working: "#339f8f",  // green — está activo
+  internal_unassigned: "#e6a303", // amber — sin agarrar
+  other: "#6a6862",             // muted
+};
 
 export interface Ticket {
   id: string;
@@ -97,9 +140,22 @@ export interface Ticket {
   daysOverdue: number | null;
   daysSinceActivity: number;
   isDelayed: boolean;
-  slaCompliant: boolean | null; // null = no aplica (abierto o sin fecha)
+  slaCompliant: boolean | null;
   hubspotUrl: string;
+  // Análisis de demora
+  daysInCurrentStage: number;
+  delaySource: DelaySource;
 }
+
+// Histórico de owners por ticket (solo se trae para demorados)
+export interface OwnerHistoryEntry {
+  ownerId: string;
+  ownerName: string;
+  start: Date;
+  end: Date | null;
+  days: number;
+}
+export type OwnerHistoryMap = Map<string, OwnerHistoryEntry[]>;
 
 const HUBSPOT_API = "https://api.hubapi.com/crm/v3/objects/tickets/search";
 const DEMORA_DAYS = 7;
@@ -171,6 +227,7 @@ async function searchPage(token: string, pipelineId: string, after?: string) {
       "hs_pipeline", "hs_pipeline_stage", "createdate",
       "hs_lastmodifieddate", "closed_date", "hs_due_date",
       "subject", "nombre_sucursal", "nombre_producto", "hubspot_owner_id",
+      "hs_v2_date_entered_current_stage", "hs_v2_time_in_current_stage",
     ],
     sorts: [{ propertyName: "createdate", direction: "ASCENDING" }],
     limit: 100,
@@ -246,13 +303,27 @@ export async function getAllTickets(): Promise<Ticket[]> {
           : null;
         const quarter: 1 | 2 = created.getTime() < Q2_START_MS ? 1 : 2;
 
+        // Días en etapa actual
+        const enteredCurrentStage = parseHsDate(r.properties.hs_v2_date_entered_current_stage);
+        let daysInCurrentStage = 0;
+        if (enteredCurrentStage) {
+          daysInCurrentStage = Math.max(0, Math.floor((now - enteredCurrentStage.getTime()) / 86400000));
+        } else if (r.properties.hs_v2_time_in_current_stage) {
+          // viene en segundos
+          const secs = Number(r.properties.hs_v2_time_in_current_stage) || 0;
+          daysInCurrentStage = Math.floor(secs / 86400);
+        }
+
+        const stageLabel = STAGE_LABELS[stage] || stage;
+        const delaySource = isOpen ? classifyDelay(stageLabel) : "other";
+
         all.push({
           id: r.id,
           quarter,
           pipelineId,
           pipelineName: PIPELINES[pipelineId as keyof typeof PIPELINES] || pipelineId,
           stageId: stage,
-          stageLabel: STAGE_LABELS[stage] || stage,
+          stageLabel,
           subject,
           branch: branch || null,
           product: product || null,
@@ -271,6 +342,8 @@ export async function getAllTickets(): Promise<Ticket[]> {
           isDelayed,
           slaCompliant,
           hubspotUrl: `${HUBSPOT_BASE_URL}/${r.id}`,
+          daysInCurrentStage,
+          delaySource,
         });
       }
       after = data.paging?.next?.after;
@@ -278,4 +351,71 @@ export async function getAllTickets(): Promise<Ticket[]> {
   }
 
   return all;
+}
+
+/**
+ * Trae el histórico de owner para una lista de tickets (solo demorados típicamente).
+ * Si la consulta falla para un ticket individual, se omite (no rompe el render).
+ */
+export async function getOwnerHistory(ticketIds: string[]): Promise<OwnerHistoryMap> {
+  const token = process.env.HUBSPOT_TOKEN;
+  if (!token) return new Map();
+  if (ticketIds.length === 0) return new Map();
+
+  // Reusar fetchOwners para mapear ID → nombre
+  const ownersMap = await fetchOwners(token);
+
+  const result: OwnerHistoryMap = new Map();
+  // Limitar concurrencia para no saturar HubSpot rate limit
+  const concurrent = 5;
+  for (let i = 0; i < ticketIds.length; i += concurrent) {
+    const batch = ticketIds.slice(i, i + concurrent);
+    await Promise.all(
+      batch.map(async (id) => {
+        try {
+          const url = `https://api.hubapi.com/crm/v3/objects/tickets/${id}?propertiesWithHistory=hubspot_owner_id`;
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            next: { revalidate: 600 },
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          const history = data.propertiesWithHistory?.hubspot_owner_id || [];
+          if (history.length === 0) return;
+
+          // history viene ordenado desc (más reciente primero)
+          // queremos asc para poder calcular fin = inicio del siguiente
+          const sorted = [...history].sort((a: any, b: any) =>
+            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
+
+          const entries: OwnerHistoryEntry[] = [];
+          const now = Date.now();
+          for (let j = 0; j < sorted.length; j++) {
+            const ownerId = String(sorted[j].value || "");
+            if (!ownerId) continue;
+            const start = new Date(sorted[j].timestamp);
+            const end = j + 1 < sorted.length ? new Date(sorted[j + 1].timestamp) : null;
+            const endMs = end ? end.getTime() : now;
+            const days = Math.max(0, Math.floor((endMs - start.getTime()) / 86400000));
+            entries.push({
+              ownerId,
+              ownerName: ownersMap.get(ownerId) ?? `ID:${ownerId}`,
+              start,
+              end,
+              days,
+            });
+          }
+          result.set(id, entries);
+        } catch {
+          // Silenciar errores individuales
+        }
+      })
+    );
+    // pequeño respiro entre batches
+    if (i + concurrent < ticketIds.length) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+  return result;
 }
