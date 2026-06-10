@@ -21,6 +21,9 @@ export default function Nav() {
           <Link href="/alertas" className="px-3 py-1 rounded-full hover:bg-surface2 text-text font-medium">
             Seguimiento
           </Link>
+          <Link href="/agentes" className="px-3 py-1 rounded-full hover:bg-surface2 text-text font-medium">
+            Agentes
+          </Link>
         </nav>
       </div>
     </header>
