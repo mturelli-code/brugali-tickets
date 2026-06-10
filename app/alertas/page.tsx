@@ -1,4 +1,5 @@
 import { getAllTickets, getOwnerHistory } from "@/lib/hubspot";
+import type { OwnerHistoryMap } from "@/lib/hubspot";
 import SeguimientoView from "@/components/SeguimientoView";
 
 export const revalidate = 600;
@@ -20,9 +21,8 @@ export default async function AlertasPage() {
 
   const fetchedAt = new Date().toISOString();
 
-  // Historial de owners para los demorados (para métricas por agente)
   const delayedIds = allTickets.filter((t) => t.isDelayed).map((t) => t.id);
-  let historyMap;
+  let historyMap: OwnerHistoryMap = new Map();
   try {
     historyMap = await getOwnerHistory(delayedIds);
   } catch {
