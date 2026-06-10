@@ -102,10 +102,10 @@ export function classifyDelay(stageLabel: string): DelaySource {
 }
 
 export const DELAY_LABELS: Record<DelaySource, string> = {
-  external: "Esperando respuesta de la sucursal/cliente",
-  internal_waiting: "Esperando respuesta interna Brugali",
-  internal_working: "En progreso (Brugali está trabajándolo)",
-  internal_unassigned: "Sin asignar (Brugali no lo agarró aún)",
+  external: "Esperando a la sucursal/cliente",
+  internal_waiting: "Bloqueado por otra área Brugali",
+  internal_working: "En progreso (en este embudo)",
+  internal_unassigned: "Sin asignar (este embudo no lo agarró)",
   other: "Otra",
 };
 
