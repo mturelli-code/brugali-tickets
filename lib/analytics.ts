@@ -592,6 +592,7 @@ export function buildAgentDeepMetrics(
 ): AgentDeepMetrics[] {
   const map = new Map<string, AgentDeepMetrics>();
   const stintsByAgent = new Map<string, OwnerStint[]>();
+  const hasHistory = history.size > 0;
 
   function getOrCreate(id: string, name: string): AgentDeepMetrics {
     let a = map.get(id);
@@ -701,10 +702,69 @@ export function buildAgentDeepMetrics(
     a.worstPipeline = worst;
   }
 
+  // FALLBACK cuando NO hay history disponible
+  // Aproximamos las métricas con la info que sí tenemos del ticket actual
+  if (!hasHistory) {
+    // Agrupar tickets por owner actual para fallbacks
+    const ticketsByOwner = new Map<string, Ticket[]>();
+    for (const t of tickets) {
+      const key = t.ownerId ?? "__sin__";
+      const arr = ticketsByOwner.get(key) || [];
+      arr.push(t);
+      ticketsByOwner.set(key, arr);
+    }
+    for (const [ownerId, ts] of Array.from(ticketsByOwner.entries())) {
+      const a = map.get(ownerId);
+      if (!a) continue;
+
+      // "Tickets Q2": cantidad de tickets que el owner tuvo
+      a.totalTouchedQ2 = ts.length;
+
+      // "Días promedio sosteniendo": usamos daysInCurrentStage como proxy
+      // (cuánto lleva el ticket en su etapa actual con este owner)
+      const openTs = ts.filter((t) => t.isOpen);
+      if (openTs.length > 0) {
+        const totalDays = openTs.reduce((s, t) => s + t.daysInCurrentStage, 0);
+        a.avgHoldingDays = totalDays / openTs.length;
+        a.totalHoldingDays = totalDays;
+        const sorted = openTs.map((t) => t.daysInCurrentStage).sort((x, y) => x - y);
+        a.medianHoldingDays = sorted[Math.floor(sorted.length / 2)];
+        // % de tickets actuales con <2 días en etapa = "respondió rápido"
+        const fast = openTs.filter((t) => t.daysInCurrentStage < 2).length;
+        a.fastResponseRate = (fast / openTs.length) * 100;
+      }
+
+      // Tickets por pipeline (igual que con history)
+      for (const t of ts) {
+        a.byPipeline[t.pipelineName] = (a.byPipeline[t.pipelineName] || 0) + 1;
+      }
+
+      // "Worst pipeline": de los tickets demorados de este owner, en qué pipeline
+      // se concentran (cuello de botella temático aproximado).
+      const delayed = ts.filter((t) => t.isDelayed);
+      if (delayed.length >= 2) {
+        const byPipelineDays = new Map<string, number[]>();
+        for (const t of delayed) {
+          const arr = byPipelineDays.get(t.pipelineName) || [];
+          arr.push(t.daysOpen);
+          byPipelineDays.set(t.pipelineName, arr);
+        }
+        let worst: { name: string; avgDays: number } | null = null;
+        for (const [pname, days] of Array.from(byPipelineDays.entries())) {
+          if (days.length < 1) continue;
+          const avg = days.reduce((s, v) => s + v, 0) / days.length;
+          if (!worst || avg > worst.avgDays) {
+            worst = { name: pname, avgDays: avg };
+          }
+        }
+        a.worstPipeline = worst;
+      }
+    }
+  }
+
   return Array.from(map.values())
     .filter((a) => a.currentOpen > 0 || a.totalTouchedQ2 > 0 || a.resolvedCount > 0)
     .sort((a, b) => {
-      // Ordenar por carga actual + demorados
       const sa = a.currentDelayed * 2 + a.currentOpen;
       const sb = b.currentDelayed * 2 + b.currentOpen;
       return sb - sa;
