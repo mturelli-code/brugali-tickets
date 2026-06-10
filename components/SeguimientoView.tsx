@@ -1,7 +1,8 @@
 "use client";
 import { useState, useMemo } from "react";
-import type { Ticket } from "@/lib/hubspot";
-import { buildFollowUpByOwner, fmtDate } from "@/lib/analytics";
+import type { Ticket, DelaySource, OwnerHistoryMap } from "@/lib/hubspot";
+import { DELAY_COLORS, DELAY_LABELS } from "@/lib/hubspot";
+import { fmtDate, buildAgentMetrics } from "@/lib/analytics";
 import LastUpdate from "@/components/LastUpdate";
 
 type SerializedTicket = Omit<
@@ -24,74 +25,78 @@ function hydrate(t: SerializedTicket): Ticket {
   } as Ticket;
 }
 
-const REASON_COLOR: Record<string, string> = {
-  V: "bg-brugalired/10 text-brugalired",
-  S: "bg-brugaliamber/10 text-brugaliamber",
-  E: "bg-brugaliorange/10 text-brugaliorange",
+type SerializedHistoryEntry = {
+  ownerId: string;
+  ownerName: string;
+  start: string;
+  end: string | null;
+  days: number;
 };
 
-function reasonTag(reason: string) {
-  const color = reason.startsWith("Vencido")
-    ? REASON_COLOR.V
-    : reason.startsWith("Sin respuesta")
-    ? REASON_COLOR.S
-    : REASON_COLOR.E;
-  return (
-    <span
-      key={reason}
-      className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold mr-1 ${color}`}
-    >
-      {reason}
-    </span>
-  );
-}
-
-type UrgencyKey = "vencido" | "sin_respuesta" | "estancado";
-
-export default function SeguimientoView({ tickets: raw, fetchedAt }: { tickets: SerializedTicket[]; fetchedAt: string }) {
+export default function SeguimientoView({
+  tickets: raw,
+  fetchedAt,
+  ownerHistory = {},
+}: {
+  tickets: SerializedTicket[];
+  fetchedAt: string;
+  ownerHistory?: Record<string, SerializedHistoryEntry[]>;
+}) {
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
   const today = new Date();
 
-  // Q2 base
-  const q2Tickets = useMemo(() => allTickets.filter((t) => t.quarter === 2), [allTickets]);
+  // Solo Q2 + abiertos
+  const openTickets = useMemo(
+    () => allTickets.filter((t) => t.quarter === 2 && t.isOpen),
+    [allTickets]
+  );
+
+  // Tickets demorados (foco de la vista)
+  const delayedTickets = useMemo(
+    () => openTickets.filter((t) => t.isDelayed),
+    [openTickets]
+  );
+
+  // Hidratar history
+  const historyMap: OwnerHistoryMap = useMemo(() => {
+    const m: OwnerHistoryMap = new Map();
+    for (const [ticketId, entries] of Object.entries(ownerHistory)) {
+      m.set(
+        ticketId,
+        entries.map((e) => ({
+          ownerId: e.ownerId,
+          ownerName: e.ownerName,
+          start: new Date(e.start),
+          end: e.end ? new Date(e.end) : null,
+          days: e.days,
+        }))
+      );
+    }
+    return m;
+  }, [ownerHistory]);
 
   // FILTROS
   const [search, setSearch] = useState("");
-  const [activeOwner, setActiveOwner] = useState<string | null>(null);
   const [activeArea, setActiveArea] = useState<string | null>(null);
   const [activeBranch, setActiveBranch] = useState<string | null>(null);
-  const [urgency, setUrgency] = useState<Set<UrgencyKey>>(new Set());
+  const [activeCategory, setActiveCategory] = useState<DelaySource | null>(null);
 
-  // Catálogos para filtros (extraídos de los tickets abiertos)
-  const openTickets = useMemo(() => q2Tickets.filter((t) => t.isOpen), [q2Tickets]);
-
-  const owners = useMemo(() => {
-    const m = new Map<string, string>();
-    for (const t of openTickets) {
-      const key = t.ownerId ?? "__sin__";
-      const name = t.ownerName ?? "Sin asignar";
-      m.set(key, name);
-    }
-    return Array.from(m.entries())
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [openTickets]);
-
+  // Catálogos
   const areas = useMemo(() => {
     const s = new Set<string>();
-    for (const t of openTickets) s.add(t.pipelineName);
+    for (const t of delayedTickets) s.add(t.pipelineName);
     return Array.from(s).sort();
-  }, [openTickets]);
+  }, [delayedTickets]);
 
   const branches = useMemo(() => {
     const s = new Set<string>();
-    for (const t of openTickets) if (t.branch) s.add(t.branch);
+    for (const t of delayedTickets) if (t.branch) s.add(t.branch);
     return Array.from(s).sort();
-  }, [openTickets]);
+  }, [delayedTickets]);
 
-  // Aplicar filtros a los tickets antes de calcular el seguimiento
-  const filteredTickets = useMemo(() => {
-    let arr = openTickets;
+  // Aplicar filtros
+  const filtered = useMemo(() => {
+    let arr = delayedTickets;
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       arr = arr.filter(
@@ -101,60 +106,53 @@ export default function SeguimientoView({ tickets: raw, fetchedAt }: { tickets: 
           (t.ownerName && t.ownerName.toLowerCase().includes(q))
       );
     }
-    if (activeOwner) arr = arr.filter((t) => (t.ownerId ?? "__sin__") === activeOwner);
     if (activeArea) arr = arr.filter((t) => t.pipelineName === activeArea);
     if (activeBranch) arr = arr.filter((t) => t.branch === activeBranch);
+    if (activeCategory) arr = arr.filter((t) => t.delaySource === activeCategory);
     return arr;
-  }, [openTickets, search, activeOwner, activeArea, activeBranch]);
+  }, [delayedTickets, search, activeArea, activeBranch, activeCategory]);
 
-  // Construir agrupado por owner sobre los filtrados
-  const byOwner = useMemo(() => buildFollowUpByOwner(filteredTickets), [filteredTickets]);
+  // Particionar por categoría de demora
+  const buckets = useMemo(() => {
+    const b: Record<DelaySource, Ticket[]> = {
+      internal_waiting: [],
+      internal_unassigned: [],
+      internal_working: [],
+      external: [],
+      other: [],
+    };
+    for (const t of filtered) b[t.delaySource].push(t);
+    // Ordenar cada bucket por días en etapa desc
+    for (const k of Object.keys(b) as DelaySource[]) {
+      b[k].sort((a, z) => z.daysInCurrentStage - a.daysInCurrentStage);
+    }
+    return b;
+  }, [filtered]);
 
-  // Aplicar filtro de urgencia AL agrupado (queda solo los tickets que matchean)
-  const finalByOwner = useMemo(() => {
-    if (urgency.size === 0) return byOwner;
-    return byOwner
-      .map((owner) => ({
-        ...owner,
-        tickets: owner.tickets.filter((it) => {
-          if (urgency.has("vencido") && it.ticket.isDelayed) return true;
-          if (
-            urgency.has("sin_respuesta") &&
-            it.ticket.stageLabel === "Nuevo" &&
-            it.ticket.daysSinceActivity > 2
-          )
-            return true;
-          if (
-            urgency.has("estancado") &&
-            it.ticket.stageLabel === "Esp. resp. interna" &&
-            it.ticket.daysSinceActivity > 5
-          )
-            return true;
-          return false;
-        }),
-      }))
-      .filter((o) => o.tickets.length > 0);
-  }, [byOwner, urgency]);
+  // Counts globales (sobre todos los demorados, no filtrados — para los KPIs arriba)
+  const totalCounts = useMemo(() => {
+    const c = { total: 0, external: 0, internal_waiting: 0, internal_working: 0, internal_unassigned: 0, other: 0 };
+    for (const t of delayedTickets) {
+      c.total++;
+      c[t.delaySource]++;
+    }
+    return c;
+  }, [delayedTickets]);
 
-  const totalTickets = finalByOwner.reduce((s, o) => s + o.tickets.length, 0);
-  const hasFilters = !!search || activeOwner || activeArea || activeBranch || urgency.size > 0;
+  // Agente metrics (sobre Q2 + history)
+  const agents = useMemo(
+    () => buildAgentMetrics(allTickets.filter((t) => t.quarter === 2), historyMap).slice(0, 8),
+    [allTickets, historyMap]
+  );
 
-  function toggleUrg(k: UrgencyKey) {
-    const next = new Set(urgency);
-    if (next.has(k)) next.delete(k);
-    else next.add(k);
-    setUrgency(next);
-  }
-
+  const hasFilters = !!search || activeArea || activeBranch || activeCategory;
   function clearFilters() {
     setSearch("");
-    setActiveOwner(null);
     setActiveArea(null);
     setActiveBranch(null);
-    setUrgency(new Set());
+    setActiveCategory(null);
   }
 
-  // Botón chip reusable
   function Chip({
     active, onClick, children, color,
   }: {
@@ -177,22 +175,144 @@ export default function SeguimientoView({ tickets: raw, fetchedAt }: { tickets: 
     );
   }
 
+  function TicketRow({ t }: { t: Ticket }) {
+    const sourceColor = DELAY_COLORS[t.delaySource];
+    const stageDaysTone =
+      t.daysInCurrentStage > 14 ? "text-brugalired"
+      : t.daysInCurrentStage > 7 ? "text-brugaliamber"
+      : "text-text";
+    return (
+      <div className="px-4 py-3 border-t border-border first:border-t-0 hover:bg-surface2/40 transition-colors">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: sourceColor }} />
+              <a
+                href={t.hubspotUrl}
+                target="_blank"
+                rel="noopener"
+                className="font-medium text-sm text-accent underline decoration-dotted hover:text-brugaliorange"
+              >
+                {t.subject}
+              </a>
+              {t.branch && (
+                <span className="text-[11px] bg-surface2 text-muted px-2 py-0.5 rounded-full">{t.branch}</span>
+              )}
+              <span className="text-[11px] text-muted">{t.pipelineName}</span>
+            </div>
+            <div className="text-[11px] text-muted mt-1">
+              Etapa: <strong>{t.stageLabel}</strong>
+              {" · "}
+              Responsable: <strong>{t.ownerName ?? "Sin asignar"}</strong>
+              {" · "}
+              Ingresó {fmtDate(t.createdAt)}
+            </div>
+          </div>
+          <div className="text-right flex-shrink-0">
+            <div className={`font-mono font-semibold text-sm ${stageDaysTone}`}>
+              {t.daysInCurrentStage}d en etapa
+            </div>
+            <div className="text-[10px] text-dim">
+              {t.daysOverdue !== null ? `${t.daysOverdue}d vencido` : `${t.daysOpen}d abiertos`}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function Bucket({
+    title, source, accent, description, priority,
+  }: {
+    title: string;
+    source: DelaySource;
+    accent: string;
+    description: string;
+    priority: "critical" | "informational";
+  }) {
+    const tickets = buckets[source];
+    if (tickets.length === 0) return null;
+
+    return (
+      <div className={`bg-surface border-2 rounded-xl overflow-hidden ${priority === "critical" ? "border-brugalired" : "border-border"}`}>
+        <div className={`px-5 py-4 ${priority === "critical" ? "bg-brugalired/5" : "bg-surface2"}`}>
+          <div className="flex items-baseline justify-between gap-3 flex-wrap">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: accent }} />
+                <h3 className="font-serif font-bold text-base" style={{ color: accent }}>{title}</h3>
+                <span className="text-xs text-muted">({tickets.length} ticket{tickets.length !== 1 ? "s" : ""})</span>
+              </div>
+              <p className="text-xs text-muted mt-1">{description}</p>
+            </div>
+          </div>
+        </div>
+        <div className="max-h-[400px] overflow-y-auto">
+          {tickets.map((t) => <TicketRow key={t.id} t={t} />)}
+        </div>
+      </div>
+    );
+  }
+
+  // KPI helper
+  function Kpi({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color: string }) {
+    return (
+      <div className="rounded-xl border border-border p-4 bg-surface" style={{ borderTopWidth: 3, borderTopColor: color }}>
+        <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1.5">{label}</div>
+        <div className="font-mono text-3xl font-semibold" style={{ color }}>{value}</div>
+        {sub && <div className="text-[11px] text-muted mt-1">{sub}</div>}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
       {/* Header */}
       <div>
         <h1 className="font-serif font-bold text-3xl text-accent">Seguimiento</h1>
         <p className="text-sm text-muted mt-1">
-          {fmtDate(today)} · <strong className="text-text font-mono">{totalTickets}</strong> ticket
-          {totalTickets !== 1 ? "s" : ""} requieren atención · {finalByOwner.length} responsable
-          {finalByOwner.length !== 1 ? "s" : ""}
+          Tickets demorados clasificados por dónde está la traba real.
         </p>
         <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
 
+      {/* KPIs de panorama */}
+      <section>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Kpi
+            label="Demorados totales"
+            value={totalCounts.total}
+            sub="+ 7 días sin cerrar"
+            color="#1d1d1b"
+          />
+          <Kpi
+            label="🔴 Bloqueados por otra área"
+            value={totalCounts.internal_waiting}
+            sub="Esperando escalamiento a otra área Brugali"
+            color={DELAY_COLORS.internal_waiting}
+          />
+          <Kpi
+            label="🟢 En progreso"
+            value={totalCounts.internal_working + totalCounts.internal_unassigned}
+            sub="Dentro del embudo (en proceso o sin asignar)"
+            color={DELAY_COLORS.internal_working}
+          />
+          <Kpi
+            label="🟠 Esperando local"
+            value={totalCounts.external}
+            sub="Pelota afuera de Brugali"
+            color={DELAY_COLORS.external}
+          />
+        </div>
+        {totalCounts.internal_waiting > 0 && (
+          <div className="mt-3 text-xs text-brugalired font-medium">
+            🚨 Hay <strong>{totalCounts.internal_waiting}</strong> tickets bloqueados esperando que otra área de Brugali actúe — el responsable del embudo no puede destrabarlos solo, hay que escalar.
+          </div>
+        )}
+      </section>
+
       {/* PANEL DE FILTROS */}
       <div className="bg-surface border border-border rounded-xl p-4 space-y-3">
-        {/* Fila 1: search + urgencia */}
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative flex-1 min-w-[200px] max-w-md">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted text-xs">🔍</span>
@@ -204,31 +324,6 @@ export default function SeguimientoView({ tickets: raw, fetchedAt }: { tickets: 
               className="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-bg focus:outline-none focus:border-accent"
             />
           </div>
-
-          <div className="flex gap-2 flex-wrap">
-            <Chip
-              active={urgency.has("vencido")}
-              onClick={() => toggleUrg("vencido")}
-              color="bg-brugalired border-brugalired"
-            >
-              🔴 Vencidos
-            </Chip>
-            <Chip
-              active={urgency.has("sin_respuesta")}
-              onClick={() => toggleUrg("sin_respuesta")}
-              color="bg-brugaliamber border-brugaliamber"
-            >
-              🟡 Sin respuesta
-            </Chip>
-            <Chip
-              active={urgency.has("estancado")}
-              onClick={() => toggleUrg("estancado")}
-              color="bg-brugaliorange border-brugaliorange"
-            >
-              🟠 Estancados
-            </Chip>
-          </div>
-
           {hasFilters && (
             <button
               onClick={clearFilters}
@@ -239,42 +334,46 @@ export default function SeguimientoView({ tickets: raw, fetchedAt }: { tickets: 
           )}
         </div>
 
-        {/* Fila 2: área */}
+        {/* Categoría de demora */}
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Área:</span>
-          <Chip active={activeArea === null} onClick={() => setActiveArea(null)}>Todas</Chip>
-          {areas.map((area) => (
+          <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Tipo de demora:</span>
+          <Chip active={activeCategory === null} onClick={() => setActiveCategory(null)}>Todos</Chip>
+          {(["internal_waiting", "internal_unassigned", "internal_working", "external"] as DelaySource[]).map((src) => (
             <Chip
-              key={area}
-              active={activeArea === area}
-              onClick={() => setActiveArea(activeArea === area ? null : area)}
+              key={src}
+              active={activeCategory === src}
+              onClick={() => setActiveCategory(activeCategory === src ? null : src)}
+              color={`border-2`}
             >
-              {area}
+              <span className="inline-block w-2 h-2 rounded-sm mr-1.5 align-middle" style={{ backgroundColor: DELAY_COLORS[src] }} />
+              {DELAY_LABELS[src]}
             </Chip>
           ))}
         </div>
 
-        {/* Fila 3: responsable */}
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Responsable:</span>
-          <Chip active={activeOwner === null} onClick={() => setActiveOwner(null)}>Todos</Chip>
-          {owners.map((o) => (
-            <Chip
-              key={o.id}
-              active={activeOwner === o.id}
-              onClick={() => setActiveOwner(activeOwner === o.id ? null : o.id)}
-            >
-              {o.name}
-            </Chip>
-          ))}
-        </div>
+        {/* Área */}
+        {areas.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Área:</span>
+            <Chip active={activeArea === null} onClick={() => setActiveArea(null)}>Todas</Chip>
+            {areas.map((area) => (
+              <Chip
+                key={area}
+                active={activeArea === area}
+                onClick={() => setActiveArea(activeArea === area ? null : area)}
+              >
+                {area}
+              </Chip>
+            ))}
+          </div>
+        )}
 
-        {/* Fila 4: sucursal */}
+        {/* Sucursal */}
         {branches.length > 0 && (
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Sucursal:</span>
             <Chip active={activeBranch === null} onClick={() => setActiveBranch(null)}>Todas</Chip>
-            {branches.slice(0, 15).map((b) => (
+            {branches.slice(0, 12).map((b) => (
               <Chip
                 key={b}
                 active={activeBranch === b}
@@ -283,98 +382,120 @@ export default function SeguimientoView({ tickets: raw, fetchedAt }: { tickets: 
                 {b}
               </Chip>
             ))}
-            {branches.length > 15 && (
-              <span className="text-[10px] text-dim self-center">
-                +{branches.length - 15} más — usá el buscador
-              </span>
+            {branches.length > 12 && (
+              <span className="text-[10px] text-dim self-center">+{branches.length - 12} más — usá el buscador</span>
             )}
           </div>
         )}
+
+        <div className="text-[11px] text-muted">
+          Mostrando <strong className="text-text font-semibold font-mono">{filtered.length}</strong> de {delayedTickets.length} tickets demorados
+        </div>
       </div>
 
-      {/* Contenido */}
-      {totalTickets === 0 ? (
+      {/* Buckets en orden de prioridad */}
+      {filtered.length === 0 ? (
         <div className="bg-surface border border-brugaligreen rounded-xl p-8 text-center">
           <div className="text-brugaligreen text-3xl mb-2">✓</div>
           <div className="font-semibold text-brugaligreen">
             {hasFilters
-              ? "Ningún ticket cumple los filtros aplicados."
-              : "Todo al día — sin tickets que requieran seguimiento."}
+              ? "Ningún ticket demorado cumple los filtros aplicados."
+              : "Sin tickets demorados. ¡Felicitaciones!"}
           </div>
           {hasFilters && (
-            <button
-              onClick={clearFilters}
-              className="mt-3 text-accent underline text-sm"
-            >
+            <button onClick={clearFilters} className="mt-3 text-accent underline text-sm">
               Limpiar filtros
             </button>
           )}
         </div>
       ) : (
-        <div className="space-y-6">
-          {finalByOwner.map((owner) => (
-            <div key={owner.ownerId ?? "sin"} className="bg-surface border border-border rounded-xl overflow-hidden">
-              <div className="bg-surface2 px-6 py-4 flex flex-wrap items-center justify-between gap-3 border-b border-border">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-accent/10 text-accent flex items-center justify-center font-bold text-sm">
-                    {owner.ownerName.charAt(0).toUpperCase()}
-                  </div>
-                  <div>
-                    <div className="font-semibold text-base">{owner.ownerName}</div>
-                    <div className="text-xs text-muted">
-                      {owner.tickets.length} ticket{owner.tickets.length !== 1 ? "s" : ""} para destrabar
-                    </div>
-                  </div>
-                </div>
-                <div className="flex gap-3 text-xs flex-wrap">
-                  {owner.tickets.some((it) => it.ticket.isDelayed) && (
-                    <span className="bg-brugalired/10 text-brugalired px-3 py-1 rounded-full font-mono font-semibold">
-                      {owner.tickets.filter((it) => it.ticket.isDelayed).length} vencido(s)
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="divide-y divide-border">
-                {owner.tickets.map(({ ticket: t, reasons }) => (
-                  <div key={t.id} className="px-6 py-3 flex flex-wrap items-start justify-between gap-3">
-                    <div className="flex flex-col gap-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <a
-                          href={t.hubspotUrl}
-                          target="_blank"
-                          rel="noopener"
-                          className="font-medium text-sm text-accent underline decoration-dotted hover:text-brugaliorange"
-                        >
-                          {t.subject}
-                        </a>
-                        <span className="text-xs text-muted">{t.pipelineName}</span>
-                        {t.branch && (
-                          <span className="text-xs bg-surface2 text-muted px-2 py-0.5 rounded-full">{t.branch}</span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-1">
-                        {reasons.map((r) => reasonTag(r))}
-                        <span className="text-xs text-dim ml-1">
-                          Etapa: {t.stageLabel} · Ingresó {fmtDate(t.createdAt)}
-                          {t.dueDate && ` · Vence ${fmtDate(t.dueDate)}`}
-                        </span>
-                      </div>
-                    </div>
-                    <a
-                      href={t.hubspotUrl}
-                      target="_blank"
-                      rel="noopener"
-                      className="text-xs text-accent border border-accent/30 hover:bg-accent hover:text-white px-3 py-1.5 rounded-full transition-colors shrink-0"
-                    >
-                      Ver en HubSpot →
-                    </a>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
+        <div className="space-y-5">
+          <Bucket
+            title="Bloqueados por otra área Brugali"
+            source="internal_waiting"
+            accent={DELAY_COLORS.internal_waiting}
+            description="Estos tickets dependen de otra área de Brugali (Compras, IT, Logística, Gerencia, etc.) que tiene que actuar. El responsable del embudo no puede destrabarlos solo: hay que escalar al área correspondiente. Acción típica: identificar qué área traba y mandar mail/llamado."
+            priority="critical"
+          />
+          <Bucket
+            title="Sin asignar dentro del embudo"
+            source="internal_unassigned"
+            accent={DELAY_COLORS.internal_unassigned}
+            description="Nadie del embudo agarró estos tickets todavía. Asignar responsable ahora."
+            priority="critical"
+          />
+          <Bucket
+            title="En progreso dentro del embudo"
+            source="internal_working"
+            accent={DELAY_COLORS.internal_working}
+            description="El responsable del embudo está activamente trabajándolos. Si llevan más de 14 días en etapa, consultarle qué los traba."
+            priority="informational"
+          />
+          <Bucket
+            title="Esperando a la sucursal/cliente"
+            source="external"
+            accent={DELAY_COLORS.external}
+            description="La pelota está afuera de Brugali. Útil para que la ejecutiva de cuenta llame al local. No es responsabilidad del embudo, pero conviene seguimiento."
+            priority="informational"
+          />
         </div>
+      )}
+
+      {/* Por agente */}
+      {agents.length > 0 && (
+        <section>
+          <h2 className="font-serif font-bold text-xl text-accent mb-3">Por agente — quién sostiene más demorados</h2>
+          <div className="bg-surface border border-border rounded-xl overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-surface2 text-muted uppercase tracking-wider text-xs">
+                <tr>
+                  <th className="text-left py-3 px-3">Agente</th>
+                  <th className="text-right py-3 px-3">Carga actual</th>
+                  <th className="text-right py-3 px-3">Demorados</th>
+                  <th className="text-right py-3 px-3">Días promedio sosteniendo</th>
+                  <th className="text-right py-3 px-3">Tiempo resolución</th>
+                </tr>
+              </thead>
+              <tbody>
+                {agents.map((a) => {
+                  const delayedTone =
+                    a.totalDelayed >= 5 ? "text-brugalired"
+                    : a.totalDelayed >= 2 ? "text-brugaliamber"
+                    : "text-muted";
+                  const holdingTone =
+                    (a.avgDaysHolding ?? 0) > 10 ? "text-brugalired font-semibold"
+                    : (a.avgDaysHolding ?? 0) > 5 ? "text-brugaliamber"
+                    : "text-text";
+                  return (
+                    <tr key={a.ownerId} className="border-t border-border">
+                      <td className="py-2 px-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-full bg-accent/10 text-accent flex items-center justify-center font-bold text-xs flex-shrink-0">
+                            {a.ownerName.charAt(0).toUpperCase()}
+                          </div>
+                          <span className="font-medium">{a.ownerName}</span>
+                        </div>
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono font-semibold">{a.totalOpen}</td>
+                      <td className={`py-2 px-3 text-right font-mono font-semibold ${delayedTone}`}>
+                        {a.totalDelayed || "—"}
+                      </td>
+                      <td className={`py-2 px-3 text-right font-mono ${holdingTone}`}>
+                        {a.avgDaysHolding !== null ? `${a.avgDaysHolding.toFixed(1)}d` : "—"}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono text-muted">
+                        {a.avgResolutionDays !== null ? `${a.avgResolutionDays.toFixed(1)}d` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[11px] text-dim mt-2">
+            <strong>Días promedio sosteniendo</strong>: cuánto se sienta el agente sobre un ticket demorado antes de soltarlo o cerrarlo (basado en historial real de reasignación). Si está en rojo, vale la pena conversación uno a uno.
+          </p>
+        </section>
       )}
     </div>
   );
