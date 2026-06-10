@@ -218,12 +218,12 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
                 </div>
                 {breakdown.externalPct >= 50 && (
                   <div className="mt-2 text-[11px] text-brugaliorange font-medium">
-                    ⚠ El {breakdown.externalPct.toFixed(0)}% de los demorados están esperando a la sucursal/cliente — la demora no es del embudo.
+                    ⚠ El {breakdown.externalPct.toFixed(0)}% de los demorados están esperando a la sucursal/cliente — la demora no es de esta área.
                   </div>
                 )}
                 {breakdown.internal_waiting >= 5 && (
                   <div className="mt-2 text-[11px] text-brugalired font-medium">
-                    🚨 {breakdown.internal_waiting} tickets esperando respuesta interna Brugali — destrabar urgente.
+                    🚨 {breakdown.internal_waiting} tickets bloqueados por otra área Brugali — escalar al área que corresponde, este embudo no puede destrabarlos solo.
                   </div>
                 )}
               </div>
