@@ -306,14 +306,14 @@ export default function EjecutivaView({
         </div>
       </section>
 
-      {/* Resumen de demoras */}
+      {/* Resumen de demoras — respeta el filtro de fecha */}
       {(() => {
-        const allDelayed = q2Tickets.filter((t) => t.isDelayed);
+        const allDelayed = filteredTickets.filter((t) => t.isDelayed);
         if (allDelayed.length === 0) return null;
         const bd = breakdownDelay(allDelayed);
         return (
           <section>
-            <h2 className="font-serif font-bold text-xl text-accent mb-4">Resumen de demoras Q2</h2>
+            <h2 className="font-serif font-bold text-xl text-accent mb-4">Resumen de demoras — {periodLabel}</h2>
             <div className="bg-surface border border-border rounded-xl p-5">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="rounded-xl bg-surface2 p-4 border-t-2 border-text">
@@ -449,7 +449,8 @@ export default function EjecutivaView({
         </div>
       </section>
 
-      {/* Por agente */}
+      {/* Por agente — MOVIDO A PESTAÑA "AGENTES" */}
+      {false && (
       <section>
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
           <h2 className="font-serif font-bold text-xl text-accent">Por agente</h2>
@@ -516,6 +517,7 @@ export default function EjecutivaView({
           <strong>Carga actual</strong>: tickets abiertos asignados al agente. <strong>Días promedio sosteniendo</strong>: días promedio que el agente tuvo los tickets demorados antes de soltarlos o resolverlos (basado en historial de cambios de responsable). <strong>Días acumulados</strong>: suma total de días que el agente tuvo demorados pasando por sus manos.
         </p>
       </section>
+      )}
 
       {/* Q1 vs Q2 (fijo) */}
       <section>
