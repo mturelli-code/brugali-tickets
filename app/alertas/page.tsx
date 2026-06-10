@@ -18,6 +18,7 @@ export default async function AlertasPage() {
     );
   }
 
+  const fetchedAt = new Date().toISOString();
   const serialized = allTickets.map((t) => ({
     ...t,
     createdAt: t.createdAt.toISOString(),
@@ -26,5 +27,5 @@ export default async function AlertasPage() {
     dueDate: t.dueDate ? t.dueDate.toISOString() : null,
   }));
 
-  return <SeguimientoView tickets={serialized} />;
+  return <SeguimientoView tickets={serialized} fetchedAt={fetchedAt} />;
 }
