@@ -1,6 +1,6 @@
 "use client";
 import { useState, useMemo } from "react";
-import type { Ticket } from "@/lib/hubspot";
+import type { Ticket, OwnerHistoryEntry, OwnerHistoryMap } from "@/lib/hubspot";
 import {
   buildAreaMetrics,
   buildBranchMetrics,
@@ -10,10 +10,12 @@ import {
   lastClosedWeekRange,
   inRange,
   fmtDate,
+  buildAgentMetrics,
 } from "@/lib/analytics";
 import KpiCard from "@/components/KpiCard";
 import WeeklyTrend from "@/components/WeeklyTrend";
 import Heatmap from "@/components/Heatmap";
+import LastUpdate from "@/components/LastUpdate";
 
 type SerializedTicket = Omit<
   Ticket,
@@ -53,9 +55,43 @@ const Q2_START = new Date(Date.UTC(2026, 3, 1));
 
 const AREA_NAMES = ["Sistemas", "Operaciones", "Administración", "Calidad", "Logística", "Marketing"];
 
-export default function EjecutivaView({ tickets: raw }: { tickets: SerializedTicket[] }) {
+type SerializedHistoryEntry = {
+  ownerId: string;
+  ownerName: string;
+  start: string;
+  end: string | null;
+  days: number;
+};
+
+export default function EjecutivaView({
+  tickets: raw,
+  fetchedAt,
+  ownerHistory = {},
+}: {
+  tickets: SerializedTicket[];
+  fetchedAt: string;
+  ownerHistory?: Record<string, SerializedHistoryEntry[]>;
+}) {
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
   const today = new Date();
+
+  // Hidratar history serializado
+  const historyMap: OwnerHistoryMap = useMemo(() => {
+    const m: OwnerHistoryMap = new Map();
+    for (const [ticketId, entries] of Object.entries(ownerHistory)) {
+      m.set(
+        ticketId,
+        entries.map((e) => ({
+          ownerId: e.ownerId,
+          ownerName: e.ownerName,
+          start: new Date(e.start),
+          end: e.end ? new Date(e.end) : null,
+          days: e.days,
+        }))
+      );
+    }
+    return m;
+  }, [ownerHistory]);
 
   // Filtro de fecha
   const [startDate, setStartDate] = useState<string>(toInputDate(Q2_START));
@@ -166,6 +202,7 @@ export default function EjecutivaView({ tickets: raw }: { tickets: SerializedTic
         <p className="text-sm text-muted mt-1">
           Q2 2026 al {fmtDate(today)} · {Math.floor((today.getTime() - Date.UTC(2026, 3, 1)) / 86400000)} días transcurridos
         </p>
+        <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
 
       {/* PANEL DE FILTRO DE FECHA */}
@@ -345,6 +382,74 @@ export default function EjecutivaView({ tickets: raw }: { tickets: SerializedTic
             ))}
           </div>
         </div>
+      </section>
+
+      {/* Por agente */}
+      <section>
+        <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
+          <h2 className="font-serif font-bold text-xl text-accent">Por agente</h2>
+          <span className="text-[11px] text-dim">Calculado sobre Q2 completo (no se filtra por período).</span>
+        </div>
+        {(() => {
+          const agents = buildAgentMetrics(q2Tickets, historyMap).slice(0, 12);
+          if (agents.length === 0) {
+            return (
+              <div className="bg-surface border border-border rounded-xl p-6 text-center text-muted text-sm">
+                Sin agentes asignados en el período.
+              </div>
+            );
+          }
+          return (
+            <div className="bg-surface border border-border rounded-xl overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-surface2 text-muted uppercase tracking-wider text-xs">
+                  <tr>
+                    <th className="text-left py-3 px-3">Agente</th>
+                    <th className="text-right py-3 px-3">Carga actual</th>
+                    <th className="text-right py-3 px-3">Demorados</th>
+                    <th className="text-right py-3 px-3">Cerrados Q2</th>
+                    <th className="text-right py-3 px-3">Tiempo resolución</th>
+                    <th className="text-right py-3 px-3">Días promedio sosteniendo</th>
+                    <th className="text-right py-3 px-3">Días acumulados</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {agents.map((a) => {
+                    const delayedTone = a.totalDelayed >= 5 ? "text-brugalired" : a.totalDelayed >= 2 ? "text-brugaliamber" : "text-muted";
+                    const holdingTone = (a.avgDaysHolding ?? 0) > 10 ? "text-brugalired" : (a.avgDaysHolding ?? 0) > 5 ? "text-brugaliamber" : "text-text";
+                    return (
+                      <tr key={a.ownerId} className="border-t border-border">
+                        <td className="py-2 px-3">
+                          <div className="flex items-center gap-2">
+                            <div className="w-7 h-7 rounded-full bg-accent/10 text-accent flex items-center justify-center font-bold text-xs flex-shrink-0">
+                              {a.ownerName.charAt(0).toUpperCase()}
+                            </div>
+                            <span className="font-medium">{a.ownerName}</span>
+                          </div>
+                        </td>
+                        <td className="py-2 px-3 text-right font-mono font-semibold">{a.totalOpen}</td>
+                        <td className={`py-2 px-3 text-right font-mono font-semibold ${delayedTone}`}>{a.totalDelayed || "—"}</td>
+                        <td className="py-2 px-3 text-right font-mono text-muted">{a.totalClosedQ2 || "—"}</td>
+                        <td className="py-2 px-3 text-right font-mono text-muted">
+                          {a.avgResolutionDays !== null ? `${a.avgResolutionDays.toFixed(1)}d` : "—"}
+                        </td>
+                        <td className={`py-2 px-3 text-right font-mono ${holdingTone}`}>
+                          {a.avgDaysHolding !== null ? `${a.avgDaysHolding.toFixed(1)}d` : "—"}
+                        </td>
+                        <td className="py-2 px-3 text-right font-mono text-muted">
+                          {a.totalDaysAccumulated > 0 ? `${a.totalDaysAccumulated}d` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
+        <p className="text-[11px] text-dim mt-2">
+          <strong>Carga actual</strong>: tickets abiertos asignados al agente. <strong>Días promedio sosteniendo</strong>: días promedio que el agente tuvo los tickets demorados antes de soltarlos o resolverlos (basado en historial de cambios de responsable). <strong>Días acumulados</strong>: suma total de días que el agente tuvo demorados pasando por sus manos.
+        </p>
       </section>
 
       {/* Q1 vs Q2 (fijo) */}
