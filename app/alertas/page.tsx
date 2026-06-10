@@ -1,5 +1,14 @@
-import { getAllTickets, getOwnerHistory } from "@/lib/hubspot";
-import type { OwnerHistoryMap } from "@/lib/hubspot";
+import {
+  getAllTickets,
+  getOwnerHistory,
+  getTicketActivities,
+  calcEffectiveOwners,
+} from "@/lib/hubspot";
+import type {
+  OwnerHistoryMap,
+  TicketActivitiesMap,
+  EffectiveOwnerMap,
+} from "@/lib/hubspot";
 import SeguimientoView from "@/components/SeguimientoView";
 
 export const revalidate = 600;
@@ -21,13 +30,29 @@ export default async function AlertasPage() {
 
   const fetchedAt = new Date().toISOString();
 
-  const delayedIds = allTickets.filter((t) => t.isDelayed).map((t) => t.id);
+  const delayedTickets = allTickets.filter((t) => t.isDelayed);
+  const delayedIds = delayedTickets.map((t) => t.id);
+
+  // Histórico de owners
   let historyMap: OwnerHistoryMap = new Map();
   try {
     historyMap = await getOwnerHistory(delayedIds);
   } catch {
     historyMap = new Map();
   }
+
+  // Actividades del ticket
+  let activitiesMap: TicketActivitiesMap = new Map();
+  try {
+    activitiesMap = await getTicketActivities(delayedIds);
+  } catch {
+    activitiesMap = new Map();
+  }
+
+  // Calcular responsable efectivo
+  const effectiveOwnersMap: EffectiveOwnerMap = calcEffectiveOwners(delayedTickets, activitiesMap);
+
+  // Serializar para el cliente
   const history: Record<string, { ownerId: string; ownerName: string; start: string; end: string | null; days: number }[]> = {};
   for (const [ticketId, entries] of Array.from(historyMap.entries())) {
     history[ticketId] = entries.map((e) => ({
@@ -39,6 +64,35 @@ export default async function AlertasPage() {
     }));
   }
 
+  const activities: Record<string, {
+    id: string; type: string; subject: string | null; body: string | null;
+    assigneeOwnerId: string | null; assigneeOwnerName: string | null;
+    timestamp: string; status: string | null;
+  }[]> = {};
+  for (const [ticketId, items] of Array.from(activitiesMap.entries())) {
+    activities[ticketId] = items.map((a) => ({
+      id: a.id,
+      type: a.type,
+      subject: a.subject,
+      body: a.body,
+      assigneeOwnerId: a.assigneeOwnerId,
+      assigneeOwnerName: a.assigneeOwnerName,
+      timestamp: a.timestamp.toISOString(),
+      status: a.status,
+    }));
+  }
+
+  const effectiveOwners: Record<string, { ownerId: string; ownerName: string; reason: string; reasonText: string; daysWaiting: number }> = {};
+  for (const [ticketId, eff] of Array.from(effectiveOwnersMap.entries())) {
+    effectiveOwners[ticketId] = {
+      ownerId: eff.ownerId,
+      ownerName: eff.ownerName,
+      reason: eff.reason,
+      reasonText: eff.reasonText,
+      daysWaiting: eff.daysWaiting,
+    };
+  }
+
   const serialized = allTickets.map((t) => ({
     ...t,
     createdAt: t.createdAt.toISOString(),
@@ -47,5 +101,13 @@ export default async function AlertasPage() {
     dueDate: t.dueDate ? t.dueDate.toISOString() : null,
   }));
 
-  return <SeguimientoView tickets={serialized} fetchedAt={fetchedAt} ownerHistory={history} />;
+  return (
+    <SeguimientoView
+      tickets={serialized}
+      fetchedAt={fetchedAt}
+      ownerHistory={history}
+      activities={activities}
+      effectiveOwners={effectiveOwners}
+    />
+  );
 }
