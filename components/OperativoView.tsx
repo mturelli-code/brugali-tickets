@@ -9,6 +9,7 @@ import {
 } from "@/lib/analytics";
 import AreaSection from "@/components/AreaSection";
 import BranchTable from "@/components/BranchTable";
+import LastUpdate from "@/components/LastUpdate";
 
 // Tickets serializados llegan con fechas como string desde el server
 type SerializedTicket = Omit<
@@ -48,7 +49,7 @@ function endOfDay(d: Date) {
 
 const Q2_START = new Date(Date.UTC(2026, 3, 1));
 
-export default function OperativoView({ tickets: raw }: { tickets: SerializedTicket[] }) {
+export default function OperativoView({ tickets: raw, fetchedAt }: { tickets: SerializedTicket[]; fetchedAt: string }) {
   // Rehidratar fechas una sola vez
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
 
@@ -126,6 +127,7 @@ export default function OperativoView({ tickets: raw }: { tickets: SerializedTic
         <p className="text-sm text-muted mt-1">
           Detalle por área y sucursal con links directos a HubSpot
         </p>
+        <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
 
       {/* PANEL DE FILTRO DE FECHA */}
