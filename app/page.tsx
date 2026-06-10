@@ -1,4 +1,4 @@
-import { getAllTickets } from "@/lib/hubspot";
+import { getAllTickets, getOwnerHistory } from "@/lib/hubspot";
 import EjecutivaView from "@/components/EjecutivaView";
 
 export const revalidate = 600;
@@ -21,7 +21,29 @@ export default async function ExecPage() {
     );
   }
 
-  // Serializar fechas para pasar a client
+  const fetchedAt = new Date().toISOString();
+
+  // Solo bajamos historial de owners para tickets DEMORADOS — son los que importan
+  const delayedIds = allTickets.filter((t) => t.isDelayed).map((t) => t.id);
+  let historyMap;
+  try {
+    historyMap = await getOwnerHistory(delayedIds);
+  } catch {
+    historyMap = new Map();
+  }
+
+  // Serializar history para pasarlo al cliente
+  const history: Record<string, { ownerId: string; ownerName: string; start: string; end: string | null; days: number }[]> = {};
+  for (const [ticketId, entries] of Array.from(historyMap.entries())) {
+    history[ticketId] = entries.map((e) => ({
+      ownerId: e.ownerId,
+      ownerName: e.ownerName,
+      start: e.start.toISOString(),
+      end: e.end ? e.end.toISOString() : null,
+      days: e.days,
+    }));
+  }
+
   const serialized = allTickets.map((t) => ({
     ...t,
     createdAt: t.createdAt.toISOString(),
@@ -30,5 +52,5 @@ export default async function ExecPage() {
     dueDate: t.dueDate ? t.dueDate.toISOString() : null,
   }));
 
-  return <EjecutivaView tickets={serialized} />;
+  return <EjecutivaView tickets={serialized} fetchedAt={fetchedAt} ownerHistory={history} />;
 }
