@@ -157,6 +157,30 @@ export interface OwnerHistoryEntry {
 }
 export type OwnerHistoryMap = Map<string, OwnerHistoryEntry[]>;
 
+// Actividades del ticket (tasks + notes)
+export interface TicketActivity {
+  id: string;
+  type: "task" | "note" | "email" | "call" | "meeting" | "other";
+  subject: string | null;
+  body: string | null;
+  assigneeOwnerId: string | null;
+  assigneeOwnerName: string | null;
+  timestamp: Date;
+  status: string | null; // tasks: NOT_STARTED / IN_PROGRESS / COMPLETED
+}
+export type TicketActivitiesMap = Map<string, TicketActivity[]>;
+
+// Resumen de "quién tiene que actuar"
+export interface EffectiveOwner {
+  ownerId: string;
+  ownerName: string;
+  reason: "last_assigned_task" | "last_assigned_note" | "current_ticket_owner" | "unassigned";
+  reasonText: string;
+  // Días que lleva "esperando" ese responsable
+  daysWaiting: number;
+}
+export type EffectiveOwnerMap = Map<string, EffectiveOwner>;
+
 const HUBSPOT_API = "https://api.hubapi.com/crm/v3/objects/tickets/search";
 const DEMORA_DAYS = 7;
 const TEST_PATTERN = /\b(test|prueba)\b/i;
@@ -351,6 +375,140 @@ export async function getAllTickets(): Promise<Ticket[]> {
   }
 
   return all;
+}
+
+/**
+ * Trae todas las actividades (tasks, notas, llamadas, etc.) asociadas a una lista de tickets.
+ * Usado para identificar al "responsable efectivo": quién tiene que actuar realmente.
+ */
+export async function getTicketActivities(ticketIds: string[]): Promise<TicketActivitiesMap> {
+  const token = process.env.HUBSPOT_TOKEN;
+  if (!token || ticketIds.length === 0) return new Map();
+
+  const ownersMap = await fetchOwners(token);
+  const result: TicketActivitiesMap = new Map();
+  const concurrent = 5;
+
+  for (let i = 0; i < ticketIds.length; i += concurrent) {
+    const batch = ticketIds.slice(i, i + concurrent);
+    await Promise.all(
+      batch.map(async (ticketId) => {
+        try {
+          // Engagements v1 — devuelve todo lo asociado en una sola llamada
+          const url = `https://api.hubapi.com/engagements/v1/engagements/associated/ticket/${ticketId}/paged?limit=100`;
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            next: { revalidate: 600 },
+          });
+          if (!res.ok) return;
+          const data = await res.json();
+          const items: any[] = data.results || [];
+
+          const activities: TicketActivity[] = items.map((it: any) => {
+            const eng = it.engagement || {};
+            const meta = it.metadata || {};
+            const type = String(eng.type || "OTHER").toLowerCase() as TicketActivity["type"];
+            const ownerId = eng.ownerId ? String(eng.ownerId) : null;
+            return {
+              id: String(eng.id || ""),
+              type: ["task", "note", "email", "call", "meeting"].includes(type)
+                ? (type as TicketActivity["type"])
+                : "other",
+              subject: meta.subject || meta.title || null,
+              body: meta.body ? String(meta.body).replace(/<[^>]*>/g, "").slice(0, 500) : null,
+              assigneeOwnerId: ownerId,
+              assigneeOwnerName: ownerId ? (ownersMap.get(ownerId) ?? `ID:${ownerId}`) : null,
+              timestamp: new Date(eng.timestamp || eng.createdAt || Date.now()),
+              status: meta.status || null,
+            };
+          });
+
+          activities.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+          result.set(ticketId, activities);
+        } catch {
+          // Silenciar errores individuales
+        }
+      })
+    );
+    if (i + concurrent < ticketIds.length) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Calcula quién es el "responsable efectivo" de cada ticket (a quién hay que empujar).
+ * Lógica:
+ *  1. Si hay una task no completada asignada → responsable = asignado de esa task.
+ *  2. Si no, si hay una nota reciente con asignado → responsable = asignado de esa nota.
+ *  3. Si no, responsable = owner actual del ticket.
+ */
+export function calcEffectiveOwners(
+  tickets: Ticket[],
+  activities: TicketActivitiesMap
+): EffectiveOwnerMap {
+  const map: EffectiveOwnerMap = new Map();
+  const now = Date.now();
+
+  for (const t of tickets) {
+    const items = activities.get(t.id) || [];
+
+    // 1. Tasks abiertas con asignado
+    const openTask = items.find(
+      (a) =>
+        a.type === "task" &&
+        a.assigneeOwnerId &&
+        a.status !== "COMPLETED"
+    );
+    if (openTask) {
+      map.set(t.id, {
+        ownerId: openTask.assigneeOwnerId!,
+        ownerName: openTask.assigneeOwnerName ?? `ID:${openTask.assigneeOwnerId}`,
+        reason: "last_assigned_task",
+        reasonText: `Tarea pendiente${openTask.subject ? `: "${openTask.subject}"` : ""}`,
+        daysWaiting: Math.max(0, Math.floor((now - openTask.timestamp.getTime()) / 86400000)),
+      });
+      continue;
+    }
+
+    // 2. Última actividad con asignado (notas, etc.)
+    const assignedActivity = items.find((a) => a.assigneeOwnerId);
+    if (assignedActivity) {
+      map.set(t.id, {
+        ownerId: assignedActivity.assigneeOwnerId!,
+        ownerName: assignedActivity.assigneeOwnerName ?? `ID:${assignedActivity.assigneeOwnerId}`,
+        reason: "last_assigned_note",
+        reasonText: `Última actividad asignada (${assignedActivity.type})`,
+        daysWaiting: Math.max(0, Math.floor((now - assignedActivity.timestamp.getTime()) / 86400000)),
+      });
+      continue;
+    }
+
+    // 3. Fallback: owner del ticket
+    if (t.ownerId) {
+      map.set(t.id, {
+        ownerId: t.ownerId,
+        ownerName: t.ownerName ?? `ID:${t.ownerId}`,
+        reason: "current_ticket_owner",
+        reasonText: "Responsable del ticket (sin actividades asignadas)",
+        daysWaiting: t.daysSinceActivity,
+      });
+      continue;
+    }
+
+    // 4. Sin asignar
+    map.set(t.id, {
+      ownerId: "__sin__",
+      ownerName: "Sin asignar",
+      reason: "unassigned",
+      reasonText: "Nadie está asignado a este ticket",
+      daysWaiting: t.daysOpen,
+    });
+  }
+
+  return map;
 }
 
 /**
