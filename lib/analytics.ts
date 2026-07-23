@@ -1,4 +1,5 @@
 import { Ticket, PIPELINE_ORDER, PIPELINES, DelaySource, DELAY_LABELS, OwnerHistoryMap } from "./hubspot";
+import { PriorityLevel, PRIORITY_ORDER, PRIORITY_LABELS, SLA_TARGET_DAYS } from "./hubspot";
 
 export interface QuarterAreaStats {
   name: string;
@@ -419,6 +420,177 @@ export function inRange(t: Ticket, start: Date, end: Date): boolean {
 export function fmtDate(d: Date): string {
   const m = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
   return `${d.getUTCDate()}-${m[d.getUTCMonth()]}`;
+}
+
+export function median(values: number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0
+    ? sorted[mid]
+    : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function avg(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((s, v) => s + v, 0) / values.length;
+}
+
+// =================== OBJETIVOS POR PRIORIDAD (KT del trimestre) ===================
+
+export interface PriorityObjective {
+  level: PriorityLevel;
+  label: string;
+  targetDays: number | null;
+  // Performance sobre tickets CERRADOS dentro del trimestre
+  closedCount: number;
+  medianDays: number | null;   // métrica principal (robusta)
+  avgDays: number | null;      // promedio (comparable al baseline del KT)
+  slaHitRate: number | null;   // % de cerrados dentro del target (0-100)
+  // Baseline: performance ANTES del trimestre (mediana), para medir mejora
+  baselineMedianDays: number | null;
+  // Progreso baseline → meta (0-100). 100 = alcanzó la meta.
+  progressPct: number | null;
+  onTarget: boolean;           // mediana actual ≤ meta
+  // Backlog abierto
+  openCount: number;
+  openOverTarget: number;      // abiertos que ya pasaron la meta (en riesgo)
+}
+
+function resolutionDays(t: Ticket): number {
+  return (t.closedAt!.getTime() - t.createdAt.getTime()) / 86400000;
+}
+
+export function buildPriorityObjectives(
+  tickets: Ticket[],
+  quarterStartMs: number,
+  quarterEndMs: number
+): PriorityObjective[] {
+  const levels: PriorityLevel[] = [...PRIORITY_ORDER, "sin"];
+  return levels.map((level) => {
+    const ofLevel = tickets.filter((t) => t.priority === level);
+
+    // Cerrados dentro del trimestre
+    const closedInQ = ofLevel.filter(
+      (t) =>
+        t.isClosed &&
+        t.closedAt &&
+        t.closedAt.getTime() >= quarterStartMs &&
+        t.closedAt.getTime() <= quarterEndMs
+    );
+    const daysInQ = closedInQ.map(resolutionDays);
+    const target = SLA_TARGET_DAYS[level];
+
+    // Baseline: cerrados ANTES del trimestre
+    const closedBefore = ofLevel.filter(
+      (t) => t.isClosed && t.closedAt && t.closedAt.getTime() < quarterStartMs
+    );
+    const baselineMedian = median(closedBefore.map(resolutionDays));
+
+    // SLA hit rate dentro del trimestre
+    let slaHitRate: number | null = null;
+    if (target !== null && daysInQ.length > 0) {
+      const hits = daysInQ.filter((d) => d <= target).length;
+      slaHitRate = (hits / daysInQ.length) * 100;
+    }
+
+    const medianDays = median(daysInQ);
+
+    // Cercanía a la meta: 100% si cumple; si no, qué tan cerca está (meta / actual).
+    // Honesto ante regresiones: si el actual es mucho peor que la meta, la barra queda baja.
+    let progressPct: number | null = null;
+    if (target !== null && medianDays !== null) {
+      progressPct = medianDays <= target
+        ? 100
+        : Math.max(0, Math.min(100, (target / medianDays) * 100));
+    }
+
+    const open = ofLevel.filter((t) => t.isOpen);
+    const openOverTarget =
+      target !== null ? open.filter((t) => t.daysOpen > target).length : 0;
+
+    return {
+      level,
+      label: PRIORITY_LABELS[level],
+      targetDays: target,
+      closedCount: closedInQ.length,
+      medianDays,
+      avgDays: avg(daysInQ),
+      slaHitRate,
+      baselineMedianDays: baselineMedian,
+      progressPct,
+      onTarget: target !== null && medianDays !== null ? medianDays <= target : false,
+      openCount: open.length,
+      openOverTarget,
+    };
+  });
+}
+
+export interface PriorityWeekPoint {
+  weekStart: Date;
+  label: string;
+  urgente: number | null;
+  alta: number | null;
+  media: number | null;
+  baja: number | null;
+}
+
+// Evolución: mediana de días de cierre por prioridad, semana a semana,
+// sobre los tickets CERRADOS en cada semana del trimestre.
+export function buildPriorityWeeklyTrend(
+  tickets: Ticket[],
+  quarterStartMs: number,
+  quarterEndMs: number
+): PriorityWeekPoint[] {
+  const months = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  const closedInQ = tickets.filter(
+    (t) =>
+      t.isClosed &&
+      t.closedAt &&
+      t.closedAt.getTime() >= quarterStartMs &&
+      t.closedAt.getTime() <= quarterEndMs
+  );
+
+  const buckets = new Map<string, { weekStart: Date; byLevel: Record<string, number[]> }>();
+  for (const t of closedInQ) {
+    const ws = startOfWeek(t.closedAt!);
+    const key = ws.toISOString().slice(0, 10);
+    let b = buckets.get(key);
+    if (!b) {
+      b = { weekStart: ws, byLevel: { urgente: [], alta: [], media: [], baja: [] } };
+      buckets.set(key, b);
+    }
+    if (b.byLevel[t.priority]) b.byLevel[t.priority].push(resolutionDays(t));
+  }
+
+  return Array.from(buckets.values())
+    .sort((a, b) => a.weekStart.getTime() - b.weekStart.getTime())
+    .map((b) => ({
+      weekStart: b.weekStart,
+      label: `${b.weekStart.getUTCDate()}-${months[b.weekStart.getUTCMonth()]}`,
+      urgente: median(b.byLevel.urgente),
+      alta: median(b.byLevel.alta),
+      media: median(b.byLevel.media),
+      baja: median(b.byLevel.baja),
+    }));
+}
+
+// Backlog accionable: tickets ABIERTOS que ya pasaron su meta SLA, por prioridad.
+// Es lo que el coordinador tiene que empujar para cumplir el KT.
+export function buildPriorityBacklog(tickets: Ticket[]): Record<PriorityLevel, Ticket[]> {
+  const out: Record<PriorityLevel, Ticket[]> = {
+    urgente: [], alta: [], media: [], baja: [], sin: [],
+  };
+  for (const t of tickets) {
+    if (!t.isOpen) continue;
+    const target = SLA_TARGET_DAYS[t.priority];
+    if (target === null) continue;
+    if (t.daysOpen > target) out[t.priority].push(t);
+  }
+  for (const level of Object.keys(out) as PriorityLevel[]) {
+    out[level].sort((a, b) => b.daysOpen - a.daysOpen);
+  }
+  return out;
 }
 
 // =================== ANÁLISIS DE DEMORA (interna vs externa) ===================
