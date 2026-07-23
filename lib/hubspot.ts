@@ -58,6 +58,52 @@ export const HUBSPOT_BASE_URL =
 export const Q1_START_MS = Date.UTC(2026, 0, 1);  // 1 ene 2026
 export const Q2_START_MS = Date.UTC(2026, 3, 1);  // 1 abr 2026
 
+// =================== PRIORIDAD DE RESOLUCIÓN (KT del trimestre) ===================
+// Campo HubSpot `prioridad_resolucion`: 1=Urgente, 2=Alta, 3=Media, 4=Baja.
+export type PriorityLevel = "urgente" | "alta" | "media" | "baja" | "sin";
+
+export const PRIORITY_FROM_CODE: Record<string, PriorityLevel> = {
+  "1": "urgente",
+  "2": "alta",
+  "3": "media",
+  "4": "baja",
+};
+
+export const PRIORITY_LABELS: Record<PriorityLevel, string> = {
+  urgente: "Urgente",
+  alta: "Alta",
+  media: "Media",
+  baja: "Baja",
+  sin: "Sin clasificar",
+};
+
+// Orden de las 4 prioridades operativas (sin incluir "sin clasificar")
+export const PRIORITY_ORDER: PriorityLevel[] = ["urgente", "alta", "media", "baja"];
+
+// Metas de tiempo de cierre por prioridad, en DÍAS.
+// KT del trimestre: Urgente ≤1d (24h), Media ≤3d (72h), Baja ≤7d.
+// Alta se interpola en 2d (48h) — ajustable si el SLA real es otro.
+export const SLA_TARGET_DAYS: Record<PriorityLevel, number | null> = {
+  urgente: 1,
+  alta: 2,
+  media: 3,
+  baja: 7,
+  sin: null,
+};
+
+export const PRIORITY_COLORS: Record<PriorityLevel, string> = {
+  urgente: "#e63323", // red
+  alta: "#f07e26",    // orange
+  media: "#e6a303",   // amber
+  baja: "#339f8f",    // green
+  sin: "#a8a59a",     // dim
+};
+
+// Trimestre en curso que sigue el KT (editable).
+export const KT_QUARTER_START_MS = Date.UTC(2026, 6, 1);   // 1 jul 2026
+export const KT_QUARTER_END_MS = Date.UTC(2026, 8, 30, 23, 59, 59, 999); // 30 sep 2026
+export const KT_QUARTER_LABEL = "Q en curso · 1-jul al 30-sep 2026";
+
 export interface RawTicket {
   id: string;
   properties: {
@@ -73,6 +119,7 @@ export interface RawTicket {
     hubspot_owner_id?: string;
     hs_v2_date_entered_current_stage?: string;
     hs_v2_time_in_current_stage?: string;
+    prioridad_resolucion?: string;
   };
 }
 
@@ -145,6 +192,9 @@ export interface Ticket {
   // Análisis de demora
   daysInCurrentStage: number;
   delaySource: DelaySource;
+  // Prioridad de resolución (KT)
+  priority: PriorityLevel;
+  priorityCode: string | null;
 }
 
 // Histórico de owners por ticket (solo se trae para demorados)
@@ -252,6 +302,7 @@ async function searchPage(token: string, pipelineId: string, after?: string) {
       "hs_lastmodifieddate", "closed_date", "hs_due_date",
       "subject", "nombre_sucursal", "nombre_producto", "hubspot_owner_id",
       "hs_v2_date_entered_current_stage", "hs_v2_time_in_current_stage",
+      "prioridad_resolucion",
     ],
     sorts: [{ propertyName: "createdate", direction: "ASCENDING" }],
     limit: 100,
@@ -341,6 +392,11 @@ export async function getAllTickets(): Promise<Ticket[]> {
         const stageLabel = STAGE_LABELS[stage] || stage;
         const delaySource = isOpen ? classifyDelay(stageLabel) : "other";
 
+        const priorityCode = r.properties.prioridad_resolucion || null;
+        const priority: PriorityLevel = priorityCode
+          ? (PRIORITY_FROM_CODE[priorityCode] ?? "sin")
+          : "sin";
+
         all.push({
           id: r.id,
           quarter,
@@ -368,6 +424,8 @@ export async function getAllTickets(): Promise<Ticket[]> {
           hubspotUrl: `${HUBSPOT_BASE_URL}/${r.id}`,
           daysInCurrentStage,
           delaySource,
+          priority,
+          priorityCode,
         });
       }
       after = data.paging?.next?.after;
