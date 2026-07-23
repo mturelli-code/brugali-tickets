@@ -496,15 +496,13 @@ export function buildPriorityObjectives(
 
     const medianDays = median(daysInQ);
 
-    // Progreso baseline → meta
+    // Cercanía a la meta: 100% si cumple; si no, qué tan cerca está (meta / actual).
+    // Honesto ante regresiones: si el actual es mucho peor que la meta, la barra queda baja.
     let progressPct: number | null = null;
-    if (target !== null && baselineMedian !== null && medianDays !== null) {
-      if (baselineMedian <= target) {
-        progressPct = 100; // ya partía cumpliendo
-      } else {
-        const raw = ((baselineMedian - medianDays) / (baselineMedian - target)) * 100;
-        progressPct = Math.max(0, Math.min(100, raw));
-      }
+    if (target !== null && medianDays !== null) {
+      progressPct = medianDays <= target
+        ? 100
+        : Math.max(0, Math.min(100, (target / medianDays) * 100));
     }
 
     const open = ofLevel.filter((t) => t.isOpen);
