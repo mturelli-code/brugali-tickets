@@ -199,11 +199,11 @@ function ObjectiveCard({ o }: { o: PriorityObjective }) {
         </div>
       </div>
 
-      {/* Progreso baseline → meta */}
+      {/* Cuánto falta para la meta */}
       <div className="mt-4">
         <div className="flex justify-between text-[10px] text-dim mb-1">
-          <span>Inicio {fmtDays(o.baselineMedianDays)}</span>
-          <span>Meta {o.targetDays}d</span>
+          <span>Cercanía a la meta</span>
+          <span>Meta ≤ {o.targetDays}d</span>
         </div>
         <div className="h-2 w-full rounded-full bg-surface2 overflow-hidden">
           <div
@@ -217,10 +217,15 @@ function ObjectiveCard({ o }: { o: PriorityObjective }) {
         <div className="text-[11px] mt-1 font-medium" style={{ color: o.onTarget ? "#339f8f" : "#6a6862" }}>
           {o.onTarget
             ? "En meta ✓"
-            : progress !== null
-            ? `${Math.round(progress)}% del camino a la meta`
-            : "Sin baseline previo"}
+            : o.medianDays !== null && o.targetDays !== null
+            ? `Faltan ${(o.medianDays - o.targetDays).toFixed(1)}d para bajar a la meta`
+            : "—"}
         </div>
+        {o.baselineMedianDays !== null && (
+          <div className="text-[10px] text-dim mt-0.5">
+            Referencia previa al Q: {fmtDays(o.baselineMedianDays)} de mediana
+          </div>
+        )}
       </div>
 
       {/* SLA + backlog */}
