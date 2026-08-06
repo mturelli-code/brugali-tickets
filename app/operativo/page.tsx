@@ -1,4 +1,5 @@
-import { getAllTickets } from "@/lib/hubspot";
+import { getAllTickets, getTicketActivities, calcEffectiveOwners } from "@/lib/hubspot";
+import type { TicketActivitiesMap, EffectiveOwnerMap } from "@/lib/hubspot";
 import OperativoView from "@/components/OperativoView";
 
 export const revalidate = 600;
@@ -19,6 +20,29 @@ export default async function OperativoPage() {
   }
 
   const fetchedAt = new Date().toISOString();
+
+  // Responsable efectivo: quien tiene que actuar segun la ultima tarea/nota asignada.
+  // Requiere traer actividades, asi que solo se calcula para los demorados (igual que /alertas).
+  const delayedTickets = allTickets.filter((t) => t.isDelayed);
+  const delayedIds = delayedTickets.map((t) => t.id);
+
+  let activitiesMap: TicketActivitiesMap = new Map();
+  try {
+    activitiesMap = delayedIds.length ? await getTicketActivities(delayedIds) : new Map();
+  } catch {
+    activitiesMap = new Map();
+  }
+  const effectiveOwnersMap: EffectiveOwnerMap = calcEffectiveOwners(delayedTickets, activitiesMap);
+
+  const effectiveOwners: Record<string, { ownerName: string; reasonText: string; daysWaiting: number }> = {};
+  for (const [ticketId, eff] of Array.from(effectiveOwnersMap.entries())) {
+    effectiveOwners[ticketId] = {
+      ownerName: eff.ownerName,
+      reasonText: eff.reasonText,
+      daysWaiting: eff.daysWaiting,
+    };
+  }
+
   const serialized = allTickets.map((t) => ({
     ...t,
     createdAt: t.createdAt.toISOString(),
@@ -27,5 +51,5 @@ export default async function OperativoPage() {
     dueDate: t.dueDate ? t.dueDate.toISOString() : null,
   }));
 
-  return <OperativoView tickets={serialized} fetchedAt={fetchedAt} />;
+  return <OperativoView tickets={serialized} fetchedAt={fetchedAt} effectiveOwners={effectiveOwners} />;
 }
