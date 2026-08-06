@@ -7,7 +7,9 @@ import type { Ticket, DelaySource } from "@/lib/hubspot";
 
 type SortKey = "subject" | "branch" | "stage" | "created" | "lastActivity" | "days" | "daysInStage";
 
-export default function AreaSection({ area: a }: { area: AreaMetrics }) {
+type EffectiveOwnerInfo = { ownerName: string; reasonText: string; daysWaiting: number };
+
+export default function AreaSection({ area: a, effectiveOwners = {} }: { area: AreaMetrics; effectiveOwners?: Record<string, EffectiveOwnerInfo> }) {
   const [expanded, setExpanded] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("days");
   const [asc, setAsc] = useState(false);
@@ -234,6 +236,8 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
                     <tr>
                       <Th col="subject" label="Ticket" />
                       <Th col="branch" label="Sucursal" />
+                      <th className="py-2 px-3 font-medium text-left whitespace-nowrap">Owner</th>
+                      <th className="py-2 px-3 font-medium text-left whitespace-nowrap">Responsable</th>
                       <Th col="stage" label="Etapa" />
                       <Th col="created" label="Ingresó" />
                       <Th col="lastActivity" label="Últ. actividad" />
@@ -270,6 +274,20 @@ export default function AreaSection({ area: a }: { area: AreaMetrics }) {
                             </a>
                           </td>
                           <td className="py-2 px-3">{t.branch || "—"}</td>
+                          <td className="py-2 px-3 whitespace-nowrap">{t.ownerName || "—"}</td>
+                          <td className="py-2 px-3 whitespace-nowrap">
+                            {(() => {
+                              const eff = effectiveOwners[t.id];
+                              const name = eff?.ownerName || t.ownerName || "—";
+                              return eff?.reasonText ? (
+                                <span title={eff.reasonText} className="border-b border-dotted border-dim cursor-help">
+                                  {name}
+                                </span>
+                              ) : (
+                                <span>{name}</span>
+                              );
+                            })()}
+                          </td>
                           <td className="py-2 px-3">
                             <span className="inline-flex items-center gap-1.5">
                               <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: stageColor }} />
