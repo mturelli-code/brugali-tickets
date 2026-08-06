@@ -47,24 +47,78 @@ function endOfDay(d: Date) {
   return x;
 }
 
-const Q2_START = new Date(Date.UTC(2026, 3, 1));
+// Primer trimestre con datos cargados en HubSpot (Q1 2026).
+// A partir de aca los trimestres se generan solos segun la fecha actual.
+const DATA_START = new Date(Date.UTC(2026, 0, 1));
+
+function quarterOf(d: Date) {
+  return Math.floor(d.getUTCMonth() / 3) + 1; // 1..4
+}
+function quarterStartDate(year: number, q: number) {
+  return new Date(Date.UTC(year, (q - 1) * 3, 1));
+}
+function quarterEndDate(year: number, q: number) {
+  // Dia 0 del mes siguiente al trimestre = ultimo dia del trimestre
+  return new Date(Date.UTC(year, q * 3, 0, 23, 59, 59, 999));
+}
+function quarterKey(year: number, q: number) {
+  return `q-${year}-${q}`;
+}
+
+// Lista de trimestres desde DATA_START hasta el trimestre en curso (inclusive).
+// Cuando el reloj entre en un nuevo trimestre, aparece solo sin tocar el codigo.
+function buildQuarters(from: Date, now: Date) {
+  const list: { year: number; q: number; key: string; label: string; current: boolean }[] = [];
+  let y = from.getUTCFullYear();
+  let q = quarterOf(from);
+  const endY = now.getUTCFullYear();
+  const endQ = quarterOf(now);
+  while (y < endY || (y === endY && q <= endQ)) {
+    list.push({
+      year: y,
+      q,
+      key: quarterKey(y, q),
+      label: `Q${q} ${y}`,
+      current: y === endY && q === endQ,
+    });
+    q++;
+    if (q > 4) {
+      q = 1;
+      y++;
+    }
+  }
+  return list;
+}
 
 export default function OperativoView({ tickets: raw, fetchedAt }: { tickets: SerializedTicket[]; fetchedAt: string }) {
   // Rehidratar fechas una sola vez
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
 
   const today = new Date();
-  const [startDate, setStartDate] = useState<string>(toInputDate(Q2_START));
-  const [endDate, setEndDate] = useState<string>(toInputDate(today));
-  const [activePreset, setActivePreset] = useState<string>("q2");
+
+  // Trimestres disponibles: se recalculan segun la fecha actual.
+  const quarters = useMemo(() => buildQuarters(DATA_START, today), [today]);
+  const currentQuarter = quarters[quarters.length - 1];
+
+  // Por defecto arranca en el trimestre en curso.
+  const defaultTo = new Date(Math.min(quarterEndDate(currentQuarter.year, currentQuarter.q).getTime(), endOfDay(today).getTime()));
+  const [startDate, setStartDate] = useState<string>(toInputDate(quarterStartDate(currentQuarter.year, currentQuarter.q)));
+  const [endDate, setEndDate] = useState<string>(toInputDate(defaultTo));
+  const [activePreset, setActivePreset] = useState<string>(currentQuarter.key);
 
   // Aplicar presets
   function applyPreset(key: string) {
     const now = new Date();
     let from: Date;
     let to: Date = endOfDay(now);
-    if (key === "q2") {
-      from = Q2_START;
+    if (key.startsWith("q-")) {
+      const [, yStr, qStr] = key.split("-");
+      const y = Number(yStr);
+      const q = Number(qStr);
+      from = quarterStartDate(y, q);
+      // El trimestre en curso se corta en el dia de hoy; los cerrados van completos.
+      const qEnd = quarterEndDate(y, q);
+      to = qEnd.getTime() > endOfDay(now).getTime() ? endOfDay(now) : qEnd;
     } else if (key === "7d") {
       from = new Date(now);
       from.setUTCDate(now.getUTCDate() - 6);
@@ -136,7 +190,13 @@ export default function OperativoView({ tickets: raw, fetchedAt }: { tickets: Se
           <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">
             Período:
           </span>
-          <PresetBtn k="q2" label="Q2 completo" />
+          {quarters.map((qt) => (
+            <PresetBtn
+              key={qt.key}
+              k={qt.key}
+              label={qt.current ? `${qt.label} (en curso)` : qt.label}
+            />
+          ))}
           <PresetBtn k="7d" label="Últimos 7 días" />
           <PresetBtn k="30d" label="Últimos 30 días" />
           <PresetBtn k="month" label="Mes en curso" />
