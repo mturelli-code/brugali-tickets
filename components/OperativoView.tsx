@@ -203,6 +203,23 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
   const totalAll = allTickets.length;
   const hasContentFilter = !!searchText.trim() || !!areaFilter;
 
+  // Carga por responsable (owner). Se agrupa por ownerId; el nombre puede venir
+  // como "ID:xxx" hasta que HubSpot resuelva los nombres (permisos).
+  const ownerLoad = useMemo(() => {
+    const m = new Map<string, { id: string; name: string; total: number; open: number; closed: number; delayed: number }>();
+    for (const t of viewTickets) {
+      const id = t.ownerId || "__none__";
+      const name = t.ownerName || "Sin asignar";
+      let e = m.get(id);
+      if (!e) { e = { id, name, total: 0, open: 0, closed: 0, delayed: 0 }; m.set(id, e); }
+      e.total++;
+      if (t.isOpen) e.open++;
+      if (t.isClosed) e.closed++;
+      if (t.isDelayed) e.delayed++;
+    }
+    return Array.from(m.values()).sort((a, b) => b.delayed - a.delayed || b.total - a.total);
+  }, [viewTickets]);
+
   function PresetBtn({ k, label }: { k: string; label: string }) {
     const active = activePreset === k;
     return (
@@ -420,6 +437,61 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
             {areaList.map((a) => (
               <AreaSection key={a.pipelineId} area={a} effectiveOwners={effectiveOwners} />
             ))}
+          </div>
+        )}
+      </section>
+
+      {/* Carga por responsable (owner) */}
+      <section>
+        <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
+          <h2 className="font-serif font-bold text-xl text-accent">Carga por responsable</h2>
+          <span className="text-xs text-muted">
+            Tickets por owner en el período/filtro. Si aparece un ID en vez del nombre, es porque HubSpot todavía no resolvió ese owner.
+          </span>
+        </div>
+        {ownerLoad.length === 0 ? (
+          <div className="bg-surface border border-border rounded-xl p-6 text-center text-muted text-sm">
+            No hay tickets en el período seleccionado.
+          </div>
+        ) : (
+          <div className="bg-surface border border-border rounded-xl overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-surface2 text-muted uppercase tracking-wider text-xs">
+                <tr>
+                  <th className="py-3 px-3 text-left whitespace-nowrap">Responsable</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Total</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Abiertos</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Cerrados</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">% cierre</th>
+                  <th className="py-3 px-3 text-right whitespace-nowrap">Demorados</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ownerLoad.map((o) => {
+                  const rate = o.total ? Math.round((o.closed / o.total) * 100) : 0;
+                  const rateColor =
+                    rate >= 75 ? "text-brugaligreen"
+                    : rate >= 50 ? "text-brugaliamber"
+                    : "text-brugalired";
+                  return (
+                    <tr key={o.id} className="border-t border-border">
+                      <td className="py-2 px-3 whitespace-nowrap">{o.name}</td>
+                      <td className="py-2 px-3 text-right font-mono font-semibold">{o.total}</td>
+                      <td className="py-2 px-3 text-right font-mono">{o.open}</td>
+                      <td className="py-2 px-3 text-right font-mono">{o.closed}</td>
+                      <td className={`py-2 px-3 text-right font-mono ${rateColor}`}>{rate}%</td>
+                      <td className="py-2 px-3 text-right font-mono">
+                        {o.delayed > 0 ? (
+                          <span className="text-brugalired font-semibold">{o.delayed}</span>
+                        ) : (
+                          <span className="text-muted">0</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </section>
