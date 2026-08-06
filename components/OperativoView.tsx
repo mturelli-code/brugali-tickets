@@ -90,7 +90,9 @@ function buildQuarters(from: Date, now: Date) {
   return list;
 }
 
-export default function OperativoView({ tickets: raw, fetchedAt }: { tickets: SerializedTicket[]; fetchedAt: string }) {
+type EffectiveOwnerInfo = { ownerName: string; reasonText: string; daysWaiting: number };
+
+export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners = {} }: { tickets: SerializedTicket[]; fetchedAt: string; effectiveOwners?: Record<string, EffectiveOwnerInfo> }) {
   // Rehidratar fechas una sola vez
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
 
@@ -303,7 +305,7 @@ export default function OperativoView({ tickets: raw, fetchedAt }: { tickets: Se
         ) : (
           <div className="space-y-3">
             {areaList.map((a) => (
-              <AreaSection key={a.pipelineId} area={a} />
+              <AreaSection key={a.pipelineId} area={a} effectiveOwners={effectiveOwners} />
             ))}
           </div>
         )}
