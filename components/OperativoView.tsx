@@ -108,6 +108,10 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
   const [endDate, setEndDate] = useState<string>(toInputDate(defaultTo));
   const [activePreset, setActivePreset] = useState<string>(currentQuarter.key);
 
+  // Filtros de contenido (busqueda + area)
+  const [searchText, setSearchText] = useState<string>("");
+  const [areaFilter, setAreaFilter] = useState<string | null>(null);
+
   // Aplicar presets
   function applyPreset(key: string) {
     const now = new Date();
@@ -142,8 +146,8 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
     setActivePreset(key);
   }
 
-  // Filtrar tickets por rango
-  const filteredTickets = useMemo(() => {
+  // Filtrar tickets por rango de fecha
+  const periodTickets = useMemo(() => {
     const from = startOfDay(new Date(startDate));
     const to = endOfDay(new Date(endDate));
     return allTickets.filter(
@@ -151,14 +155,53 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
     );
   }, [allTickets, startDate, endDate]);
 
+  // Areas disponibles para el filtro (pipelineId -> nombre)
+  const areaOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    allTickets.forEach((t) => { if (t.pipelineId) m.set(t.pipelineId, t.pipelineName); });
+    return Array.from(m.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allTickets]);
+
+  // Aplicar busqueda y filtro de area sobre el periodo
+  const viewTickets = useMemo(() => {
+    let arr = periodTickets;
+    if (areaFilter) arr = arr.filter((t) => t.pipelineId === areaFilter);
+    const q = searchText.trim().toLowerCase();
+    if (q) {
+      arr = arr.filter((t) =>
+        (t.subject && t.subject.toLowerCase().includes(q)) ||
+        (t.product && t.product.toLowerCase().includes(q)) ||
+        (t.branch && t.branch.toLowerCase().includes(q)) ||
+        t.id.includes(q)
+      );
+    }
+    return arr;
+  }, [periodTickets, areaFilter, searchText]);
+
+  // KPIs del periodo/filtro
+  const kpis = useMemo(() => {
+    const total = viewTickets.length;
+    const closed = viewTickets.filter((t) => t.isClosed).length;
+    const open = viewTickets.filter((t) => t.isOpen).length;
+    const delayed = viewTickets.filter((t) => t.isDelayed).length;
+    const slaEval = viewTickets.filter((t) => t.slaCompliant !== null);
+    const slaOk = slaEval.filter((t) => t.slaCompliant === true).length;
+    const closeRate = total ? Math.round((closed / total) * 100) : 0;
+    const slaRate = slaEval.length ? Math.round((slaOk / slaEval.length) * 100) : null;
+    return { total, closed, open, delayed, closeRate, slaRate, slaEvalCount: slaEval.length };
+  }, [viewTickets]);
+
   // Recalcular métricas con los tickets filtrados
-  const areas = useMemo(() => buildAreaMetrics(filteredTickets), [filteredTickets]);
-  const branches = useMemo(() => buildBranchMetrics(filteredTickets), [filteredTickets]);
-  const alerts = useMemo(() => detectProductAlerts(filteredTickets), [filteredTickets]);
+  const areas = useMemo(() => buildAreaMetrics(viewTickets), [viewTickets]);
+  const branches = useMemo(() => buildBranchMetrics(viewTickets), [viewTickets]);
+  const alerts = useMemo(() => detectProductAlerts(viewTickets), [viewTickets]);
 
   const areaList = Object.values(areas).filter((a) => a.total > 0);
-  const totalFiltered = filteredTickets.length;
+  const totalFiltered = viewTickets.length;
   const totalAll = allTickets.length;
+  const hasContentFilter = !!searchText.trim() || !!areaFilter;
 
   function PresetBtn({ k, label }: { k: string; label: string }) {
     const active = activePreset === k;
@@ -176,6 +219,16 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
     );
   }
 
+  function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+    return (
+      <div className="rounded-xl bg-surface border border-border p-4">
+        <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">{label}</div>
+        <div className={`font-mono text-2xl font-semibold mt-1 ${color || "text-text"}`}>{value}</div>
+        {sub && <div className="text-[11px] text-muted mt-0.5">{sub}</div>}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-10">
       <div>
@@ -186,9 +239,9 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
         <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
 
-      {/* PANEL DE FILTRO DE FECHA */}
-      <div className="bg-surface border border-border rounded-xl p-4">
-        <div className="flex flex-wrap items-center gap-3 mb-3">
+      {/* PANEL DE FILTRO */}
+      <div className="bg-surface border border-border rounded-xl p-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
           <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">
             Período:
           </span>
@@ -236,9 +289,69 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
           <div className="ml-auto text-[11px] text-muted">
             Mostrando{" "}
             <strong className="text-text font-semibold font-mono">{totalFiltered}</strong> de{" "}
-            {totalAll} tickets en el período
+            {totalAll} tickets
           </div>
         </div>
+
+        {/* Búsqueda + filtro de área */}
+        <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-border">
+          <div className="relative flex-1 min-w-[220px] max-w-md">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted text-xs">🔍</span>
+            <input
+              type="text"
+              placeholder="Buscar por asunto, producto, sucursal o ID..."
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-bg focus:outline-none focus:border-accent transition-colors"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Área:</span>
+            <button
+              onClick={() => setAreaFilter(null)}
+              className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                areaFilter === null
+                  ? "bg-accent text-white border-accent font-semibold"
+                  : "border-border text-muted hover:border-accent hover:text-accent"
+              }`}
+            >
+              Todas
+            </button>
+            {areaOptions.map((opt) => {
+              const active = areaFilter === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => setAreaFilter(active ? null : opt.id)}
+                  className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                    active
+                      ? "bg-accent text-white border-accent font-semibold"
+                      : "border-border text-muted hover:border-accent hover:text-accent"
+                  }`}
+                >
+                  {opt.name}
+                </button>
+              );
+            })}
+          </div>
+          {hasContentFilter && (
+            <button
+              onClick={() => { setSearchText(""); setAreaFilter(null); }}
+              className="px-3 py-1.5 text-xs rounded-lg border border-border text-muted hover:bg-surface2 transition-colors"
+            >
+              ✕ Limpiar
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* FILA DE KPIs */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+        <KpiCard label="Tickets" value={String(kpis.total)} sub="en el período/filtro" />
+        <KpiCard label="Cerrados" value={String(kpis.closed)} sub={`${kpis.closeRate}% del total`} color={kpis.closeRate >= 75 ? "text-brugaligreen" : kpis.closeRate >= 50 ? "text-brugaliamber" : "text-brugalired"} />
+        <KpiCard label="Abiertos" value={String(kpis.open)} sub="sin cerrar" />
+        <KpiCard label="Demorados +7d" value={String(kpis.delayed)} sub="abiertos con demora" color={kpis.delayed === 0 ? "text-brugaligreen" : kpis.delayed >= 5 ? "text-brugalired" : "text-brugaliamber"} />
+        <KpiCard label="Cumplimiento SLA" value={kpis.slaRate === null ? "s/d" : `${kpis.slaRate}%`} sub={kpis.slaEvalCount ? `sobre ${kpis.slaEvalCount} con SLA` : "sin datos"} color={kpis.slaRate === null ? "text-muted" : kpis.slaRate >= 75 ? "text-brugaligreen" : kpis.slaRate >= 50 ? "text-brugaliamber" : "text-brugalired"} />
       </div>
 
       {/* Alertas Calidad */}
