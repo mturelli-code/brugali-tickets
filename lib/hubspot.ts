@@ -261,8 +261,52 @@ function parseHsDate(val: string | undefined): Date | null {
   return new Date(val);
 }
 
+const OWNER_NAMES: Record<string, string> = {
+  "75413586": "Dayana Mengo",
+  "76312083": "Francisco Piedra",
+  "80774035": "Juan Velez",
+  "81465116": "Juan Velez",
+  "81787033": "Stefania Mengo",
+  "82274329": "Mariano Gilardi",
+  "82599281": "Gerardo Boiero Rovera",
+  "82726196": "Alejo Ezequiel",
+  "83150224": "Agente de clientes de HubSpot",
+  "83467317": "Romina Damiani",
+  "83772265": "Maria Woodgate",
+  "84107858": "Carlos Gomez",
+  "84107859": "Leonel Marini",
+  "84380570": "Martin Lupion",
+  "85847323": "Abril Hoc",
+  "88836001": "Carolina Ferrero",
+  "92705680": "Candela Carletti",
+  "92781494": "Joaquin Capello",
+  "92781707": "D\u00e9bora Paez",
+  "92781784": "Ivana Moledo",
+  "94445343": "Nicolas Lopez",
+  "94513266": "Victoria Taboada",
+  "96055364": "Guadalupe Alvarez",
+  "96273074": "Lucas Garzon",
+  "236746396": "Milagros Pereyra",
+  "310671061": "Candelaria Fernandez",
+  "551277626": "Francisco Piedra",
+  "551382359": "Horacio Savid",
+  "558469552": "Mauricio Savid",
+  "558477826": "Denise Lagos",
+  "559212074": "Denise de Sushi2x1",
+  "664069760": "Antonella Fernandez",
+  "750738824": "Mariana Papa",
+  "919555195": "Julieta Camilletti",
+  "971334918": "Zahira Mansilla",
+  "1567885228": "Maria Agostina Nagalli",
+  "1575221146": "Melania Turelli",
+  "1721035762": "Marcos Tello",
+  "1993696517": "Irene Gissara",
+};
+
 async function fetchOwners(token: string): Promise<Map<string, string>> {
-  const map = new Map<string, string>();
+  // Mapa de respaldo (export de HubSpot). Se usa cuando el token de la app no
+  // tiene permiso de owners; la API sobrescribe estos nombres si estan disponibles.
+  const map = new Map<string, string>(Object.entries(OWNER_NAMES));
   // Traemos owners activos + desactivados Y ademas los archivados (gente que se fue,
   // ej. ex-empleados). Sin los archivados, sus IDs aparecen como "ID:xxxxx" sin nombre.
   const baseUrls = [
