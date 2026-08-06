@@ -262,29 +262,37 @@ function parseHsDate(val: string | undefined): Date | null {
 }
 
 async function fetchOwners(token: string): Promise<Map<string, string>> {
-  try {
-    const map = new Map<string, string>();
-    let after: string | undefined;
-    do {
-      const url = `https://api.hubapi.com/crm/v3/owners?limit=100&includeDeactivated=true${after ? `&after=${after}` : ""}`;
-      const res = await fetch(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        next: { revalidate: 3600 },
-      });
-      if (!res.ok) break;
-      const data = await res.json();
-      for (const o of data.results || []) {
-        const name = `${o.firstName || ""} ${o.lastName || ""}`.trim() || o.email || String(o.id);
-        // HubSpot usa id (CRM owner ID) o userId según el contexto — mapeamos ambos
-        if (o.id) map.set(String(o.id), name);
-        if (o.userId) map.set(String(o.userId), name);
-      }
-      after = data.paging?.next?.after;
-    } while (after);
-    return map;
-  } catch {
-    return new Map();
+  const map = new Map<string, string>();
+  // Traemos owners activos + desactivados Y ademas los archivados (gente que se fue,
+  // ej. ex-empleados). Sin los archivados, sus IDs aparecen como "ID:xxxxx" sin nombre.
+  const baseUrls = [
+    "https://api.hubapi.com/crm/v3/owners?limit=100&includeDeactivated=true",
+    "https://api.hubapi.com/crm/v3/owners?limit=100&archived=true",
+  ];
+  for (const base of baseUrls) {
+    try {
+      let after: string | undefined;
+      do {
+        const url = `${base}${after ? `&after=${after}` : ""}`;
+        const res = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          next: { revalidate: 3600 },
+        });
+        if (!res.ok) break;
+        const data = await res.json();
+        for (const o of data.results || []) {
+          const name = `${o.firstName || ""} ${o.lastName || ""}`.trim() || o.email || String(o.id);
+          // HubSpot usa id (CRM owner ID) o userId según el contexto — mapeamos ambos
+          if (o.id) map.set(String(o.id), name);
+          if (o.userId) map.set(String(o.userId), name);
+        }
+        after = data.paging?.next?.after;
+      } while (after);
+    } catch {
+      // Si una variante falla, seguimos con la otra
+    }
   }
+  return map;
 }
 
 async function searchPage(token: string, pipelineId: string, after?: string) {
