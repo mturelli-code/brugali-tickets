@@ -822,6 +822,8 @@ export interface AgentDeepMetrics {
   worstPipeline: { name: string; avgDays: number } | null;
   // Performance
   fastResponseRate: number | null;        // % de tickets que soltó en <2 días
+  // Mediana de días de resolución por nivel de urgencia (tickets que él cerró)
+  resolutionByPriority: Record<PriorityLevel, number | null>;
 }
 
 interface OwnerStint {
@@ -857,6 +859,7 @@ export function buildAgentDeepMetrics(
         byPipeline: {},
         worstPipeline: null,
         fastResponseRate: null,
+        resolutionByPriority: { urgente: null, alta: null, media: null, baja: null, sin: null },
       };
       map.set(id, a);
     }
@@ -890,6 +893,26 @@ export function buildAgentDeepMetrics(
     const a = map.get(key);
     if (a) {
       a.avgResolutionDays = arr.reduce((s, v) => s + v, 0) / arr.length;
+    }
+  }
+
+  // Resolución por nivel de urgencia (mediana de días de cierre, de los tickets que cerró)
+  const resByOwnerPrio = new Map<string, Record<string, number[]>>();
+  for (const t of tickets) {
+    if (t.isClosed && t.closedAt) {
+      const key = t.ownerId ?? "__sin__";
+      let rec = resByOwnerPrio.get(key);
+      if (!rec) { rec = {}; resByOwnerPrio.set(key, rec); }
+      const days = (t.closedAt.getTime() - t.createdAt.getTime()) / 86400000;
+      (rec[t.priority] = rec[t.priority] || []).push(days);
+    }
+  }
+  for (const [key, rec] of Array.from(resByOwnerPrio.entries())) {
+    const a = map.get(key);
+    if (!a) continue;
+    for (const p of Object.keys(rec)) {
+      const arr = rec[p].sort((x, y) => x - y);
+      if (arr.length) a.resolutionByPriority[p as PriorityLevel] = arr[Math.floor(arr.length / 2)];
     }
   }
 
