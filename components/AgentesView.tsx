@@ -1,8 +1,9 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, Fragment } from "react";
 import type { Ticket, OwnerHistoryMap } from "@/lib/hubspot";
 import { buildAgentDeepMetrics, fmtDate } from "@/lib/analytics";
 import LastUpdate from "@/components/LastUpdate";
+import PeriodFilter, { defaultRange, startOfDay, endOfDay } from "@/components/PeriodFilter";
 
 type SerializedTicket = Omit<
   Ticket,
@@ -64,15 +65,28 @@ export default function AgentesView({
     return m;
   }, [ownerHistory]);
 
-  // Métricas profundas sobre Q2 completo
-  const q2Tickets = useMemo(() => allTickets.filter((t) => t.quarter === 2), [allTickets]);
-  const agents = useMemo(() => buildAgentDeepMetrics(q2Tickets, historyMap), [q2Tickets, historyMap]);
+  // Filtro de período (por defecto, trimestre en curso). Las métricas se recalculan
+  // sobre los tickets creados en el rango elegido.
+  const initRange = useMemo(() => defaultRange(new Date()), []);
+  const [range, setRange] = useState<{ from: string; to: string }>({ from: initRange.from, to: initRange.to });
+  const fromMs = startOfDay(new Date(range.from)).getTime();
+  const toMs = endOfDay(new Date(range.to)).getTime();
+
+  const periodTickets = useMemo(
+    () => allTickets.filter((t) => {
+      const c = t.createdAt.getTime();
+      return c >= fromMs && c <= toMs;
+    }),
+    [allTickets, fromMs, toMs]
+  );
+  const agents = useMemo(() => buildAgentDeepMetrics(periodTickets, historyMap), [periodTickets, historyMap]);
   const hasHistory = historyMap.size > 0;
 
   const [sortKey, setSortKey] = useState<SortKey>("currentDelayed");
   const [asc, setAsc] = useState(false);
   const [search, setSearch] = useState("");
   const [activePipeline, setActivePipeline] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const pipelines = useMemo(() => {
     const s = new Set<string>();
@@ -154,6 +168,9 @@ export default function AgentesView({
           </div>
         )}
       </div>
+
+      {/* FILTRO DE PERÍODO */}
+      <PeriodFilter onChange={(from, to) => setRange({ from, to })} />
 
       {/* KPIs */}
       <section className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -259,7 +276,7 @@ export default function AgentesView({
                 <Th col="name" label="Agente" />
                 <Th col="currentOpen" label="Carga" right />
                 <Th col="currentDelayed" label="Demorados" right />
-                <Th col="totalTouched" label="Tickets Q2" right />
+                <Th col="totalTouched" label="Tickets" right />
                 <Th col="avgHolding" label="Días prom. sosteniendo" right />
                 <Th col="avgResolution" label="Tiempo resolución" right />
                 <Th col="fastResponse" label="% &lt;2d" right />
@@ -281,37 +298,94 @@ export default function AgentesView({
                   (a.fastResponseRate ?? 0) >= 70 ? "text-brugaligreen font-semibold"
                   : (a.fastResponseRate ?? 0) >= 40 ? "text-brugaliamber"
                   : "text-brugalired";
+                const isExp = expandedId === a.ownerId;
+                const pipeEntries = Object.entries(a.byPipeline).sort((x, y) => y[1] - x[1]);
                 return (
-                  <tr key={a.ownerId} className="border-t border-border">
-                    <td className="py-2.5 px-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-7 h-7 rounded-full bg-accent/10 text-accent flex items-center justify-center font-bold text-xs flex-shrink-0">
-                          {a.ownerName.charAt(0).toUpperCase()}
+                  <Fragment key={a.ownerId}>
+                    <tr
+                      onClick={() => setExpandedId(isExp ? null : a.ownerId)}
+                      className="border-t border-border cursor-pointer hover:bg-surface2/40 transition-colors"
+                    >
+                      <td className="py-2.5 px-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] font-mono transition-transform inline-block ${isExp ? "rotate-90" : ""}`}>▶</span>
+                          <div className="w-7 h-7 rounded-full bg-accent/10 text-accent flex items-center justify-center font-bold text-xs flex-shrink-0">
+                            {a.ownerName.charAt(0).toUpperCase()}
+                          </div>
+                          <span className="font-medium">{a.ownerName}</span>
                         </div>
-                        <span className="font-medium">{a.ownerName}</span>
-                      </div>
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono font-semibold">{a.currentOpen}</td>
-                    <td className={`py-2.5 px-3 text-right font-mono ${delayedTone}`}>{a.currentDelayed || "—"}</td>
-                    <td className="py-2.5 px-3 text-right font-mono text-muted">{a.totalTouchedQ2}</td>
-                    <td className={`py-2.5 px-3 text-right font-mono ${holdingTone}`}>
-                      {a.avgHoldingDays !== null ? `${a.avgHoldingDays.toFixed(1)}d` : "—"}
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-muted">
-                      {a.avgResolutionDays !== null ? `${a.avgResolutionDays.toFixed(1)}d` : "—"}
-                    </td>
-                    <td className={`py-2.5 px-3 text-right font-mono ${fastTone}`}>
-                      {a.fastResponseRate !== null ? `${a.fastResponseRate.toFixed(0)}%` : "—"}
-                    </td>
-                    <td className="py-2.5 px-3 text-xs">
-                      {a.worstPipeline ? (
-                        <span>
-                          <strong>{a.worstPipeline.name}</strong>{" "}
-                          <span className="text-muted">({a.worstPipeline.avgDays.toFixed(1)}d prom)</span>
-                        </span>
-                      ) : "—"}
-                    </td>
-                  </tr>
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-semibold">{a.currentOpen}</td>
+                      <td className={`py-2.5 px-3 text-right font-mono ${delayedTone}`}>{a.currentDelayed || "—"}</td>
+                      <td className="py-2.5 px-3 text-right font-mono text-muted">{a.totalTouchedQ2}</td>
+                      <td className={`py-2.5 px-3 text-right font-mono ${holdingTone}`}>
+                        {a.avgHoldingDays !== null ? `${a.avgHoldingDays.toFixed(1)}d` : "—"}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono text-muted">
+                        {a.avgResolutionDays !== null ? `${a.avgResolutionDays.toFixed(1)}d` : "—"}
+                      </td>
+                      <td className={`py-2.5 px-3 text-right font-mono ${fastTone}`}>
+                        {a.fastResponseRate !== null ? `${a.fastResponseRate.toFixed(0)}%` : "—"}
+                      </td>
+                      <td className="py-2.5 px-3 text-xs">
+                        {a.worstPipeline ? (
+                          <span>
+                            <strong>{a.worstPipeline.name}</strong>{" "}
+                            <span className="text-muted">({a.worstPipeline.avgDays.toFixed(1)}d prom)</span>
+                          </span>
+                        ) : "—"}
+                      </td>
+                    </tr>
+                    {isExp && (
+                      <tr className="bg-surface2/30 border-t border-border">
+                        <td colSpan={8} className="px-6 py-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                              <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-2">Tickets por embudo</div>
+                              {pipeEntries.length === 0 ? (
+                                <div className="text-xs text-muted">Sin datos en el período</div>
+                              ) : (
+                                <div className="flex flex-wrap gap-2">
+                                  {pipeEntries.map(([name, n]) => (
+                                    <span key={name} className="bg-bg border border-border px-2 py-1 rounded-full text-[11px] font-mono">
+                                      {name}: <strong>{n}</strong>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-2">Detalle de tiempos</div>
+                              <div className="grid grid-cols-3 gap-3 text-center">
+                                <div>
+                                  <div className="font-mono text-lg font-semibold text-text">{a.resolvedCount}</div>
+                                  <div className="text-[10px] text-muted">cerrados por él</div>
+                                </div>
+                                <div>
+                                  <div className="font-mono text-lg font-semibold text-text">{a.medianHoldingDays !== null ? `${a.medianHoldingDays.toFixed(1)}d` : "—"}</div>
+                                  <div className="text-[10px] text-muted">mediana sosteniendo</div>
+                                </div>
+                                <div>
+                                  <div className="font-mono text-lg font-semibold text-text">{a.totalHoldingDays > 0 ? `${a.totalHoldingDays}d` : "—"}</div>
+                                  <div className="text-[10px] text-muted">días acumulados</div>
+                                </div>
+                              </div>
+                              {a.worstPipeline && (
+                                <div className="text-[11px] text-muted mt-3">
+                                  Donde más se traba: <strong className="text-text">{a.worstPipeline.name}</strong> ({a.worstPipeline.avgDays.toFixed(1)}d promedio).
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="mt-3 text-right">
+                            <a href="https://app.hubspot.com" target="_blank" rel="noopener" className="text-[11px] text-accent underline decoration-dotted">
+                              Ver en HubSpot →
+                            </a>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -319,7 +393,7 @@ export default function AgentesView({
         </div>
         <div className="mt-3 text-[11px] text-dim space-y-1">
           <div><strong>Carga</strong>: tickets abiertos asignados ahora. <strong>Demorados</strong>: de esa carga, cuántos están vencidos.</div>
-          <div><strong>Tickets Q2</strong>: cantidad de tickets distintos que pasaron por sus manos en el trimestre.</div>
+          <div><strong>Tickets</strong>: cantidad de tickets distintos que pasaron por sus manos en el período. Cliqueá una fila para ver el detalle por embudo.</div>
           <div><strong>Días prom. sosteniendo</strong>: cuánto se sienta sobre un ticket antes de soltarlo (basado en historial real de reasignaciones).</div>
           <div><strong>Tiempo resolución</strong>: tiempo promedio que tardaron en cerrar los tickets que él cerró.</div>
           <div><strong>% &lt;2d</strong>: porcentaje de "stints" (períodos asignado) que duraron menos de 2 días — alta = pasa rápido, baja = sostiene mucho.</div>
