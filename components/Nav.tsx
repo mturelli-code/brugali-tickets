@@ -15,6 +15,9 @@ export default function Nav() {
           <Link href="/" className="px-3 py-1 rounded-full hover:bg-surface2 text-text font-medium">
             Ejecutivo
           </Link>
+          <Link href="/direccion" className="px-3 py-1 rounded-full hover:bg-surface2 text-text font-medium">
+            Dirección
+          </Link>
           <Link href="/objetivos" className="px-3 py-1 rounded-full hover:bg-surface2 text-text font-medium">
             Objetivos
           </Link>
