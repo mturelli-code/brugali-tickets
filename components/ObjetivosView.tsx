@@ -12,9 +12,11 @@ import {
 } from "@/lib/hubspot";
 import {
   buildPriorityObjectives, buildPriorityWeeklyTrend, buildPriorityBacklog,
+  fmtDate,
   type PriorityObjective,
 } from "@/lib/analytics";
 import LastUpdate from "@/components/LastUpdate";
+import PeriodFilter, { defaultRange, startOfDay, endOfDay } from "@/components/PeriodFilter";
 
 type SerializedTicket = Omit<
   Ticket, "createdAt" | "lastModifiedAt" | "closedAt" | "dueDate"
@@ -49,13 +51,19 @@ export default function ObjetivosView({
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
   const now = Date.now();
 
+  // Filtro de período (por defecto, trimestre en curso = Q del KT).
+  const init = useMemo(() => defaultRange(new Date()), []);
+  const [range, setRange] = useState<{ from: string; to: string }>({ from: init.from, to: init.to });
+  const fromMs = startOfDay(new Date(range.from)).getTime();
+  const toMs = endOfDay(new Date(range.to)).getTime();
+
   const objectives = useMemo(
-    () => buildPriorityObjectives(allTickets, KT_QUARTER_START_MS, KT_QUARTER_END_MS),
-    [allTickets]
+    () => buildPriorityObjectives(allTickets, fromMs, toMs),
+    [allTickets, fromMs, toMs]
   );
   const trend = useMemo(
-    () => buildPriorityWeeklyTrend(allTickets, KT_QUARTER_START_MS, KT_QUARTER_END_MS),
-    [allTickets]
+    () => buildPriorityWeeklyTrend(allTickets, fromMs, toMs),
+    [allTickets, fromMs, toMs]
   );
   const backlog = useMemo(() => buildPriorityBacklog(allTickets), [allTickets]);
 
@@ -69,8 +77,8 @@ export default function ObjetivosView({
   const sinClasificar = byLevel.get("sin");
 
   const enMeta = cards.filter((c) => c.onTarget).length;
-  const daysElapsed = Math.max(0, Math.floor((now - KT_QUARTER_START_MS) / 86400000));
-  const daysLeft = Math.max(0, Math.ceil((KT_QUARTER_END_MS - now) / 86400000));
+  const daysElapsed = Math.max(0, Math.floor((Math.min(now, toMs) - fromMs) / 86400000));
+  const daysLeft = Math.max(0, Math.ceil((toMs - now) / 86400000));
 
   const totalBacklog = PRIORITY_ORDER.reduce((s, l) => s + backlog[l].length, 0);
 
@@ -80,10 +88,13 @@ export default function ObjetivosView({
       <div>
         <h1 className="font-serif font-bold text-3xl text-accent">Objetivos del trimestre</h1>
         <p className="text-sm text-muted mt-1">
-          {KT_QUARTER_LABEL} · {daysElapsed} días transcurridos · {daysLeft} restantes
+          {fmtDate(new Date(range.from))} al {fmtDate(new Date(range.to))} · {daysElapsed} días transcurridos{daysLeft > 0 ? ` · ${daysLeft} restantes` : ""}
         </p>
         <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
+
+      {/* FILTRO DE PERÍODO */}
+      <PeriodFilter onChange={(from, to) => setRange({ from, to })} />
 
       {/* RESUMEN */}
       <div className="bg-surface border border-border rounded-xl p-5">
@@ -280,58 +291,70 @@ function PriorityTrendChart({ data }: { data: any[] }) {
 }
 
 function BacklogGroup({ level, tickets }: { level: PriorityLevel; tickets: Ticket[] }) {
-  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(false);      // grupo colapsado por defecto (desplegable)
+  const [showAll, setShowAll] = useState(false); // dentro del grupo, ver todos vs top 5
   const color = PRIORITY_COLORS[level];
   const target = SLA_TARGET_DAYS[level];
   if (tickets.length === 0) return null;
-  const shown = expanded ? tickets : tickets.slice(0, 5);
+  const shown = showAll ? tickets : tickets.slice(0, 5);
 
   return (
     <div className="bg-surface border border-border rounded-xl overflow-hidden">
-      <div className="flex items-center gap-2 px-5 py-3 border-b border-border" style={{ borderLeft: `4px solid ${color}` }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-5 py-3 text-left hover:bg-surface2/40 transition-colors"
+        style={{ borderLeft: `4px solid ${color}` }}
+      >
+        <span className={`text-[10px] font-mono transition-transform inline-block ${open ? "rotate-90" : ""}`}>▶</span>
         <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
         <span className="font-serif font-bold text-sm text-text">{PRIORITY_LABELS[level]}</span>
         <span className="text-[11px] text-muted">· meta ≤ {target}d</span>
         <span className="ml-auto font-mono text-sm font-semibold" style={{ color }}>{tickets.length}</span>
         <span className="text-[11px] text-muted">vencidos</span>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-surface2 text-muted uppercase tracking-wider text-[10px]">
-            <tr>
-              <th className="text-left py-2 px-4">Motivo</th>
-              <th className="text-left py-2 px-3">Sucursal</th>
-              <th className="text-left py-2 px-3">Área</th>
-              <th className="text-left py-2 px-3">Etapa</th>
-              <th className="text-right py-2 px-4">Días abiertos</th>
-            </tr>
-          </thead>
-          <tbody>
-            {shown.map((t) => (
-              <tr key={t.id} className="border-t border-border hover:bg-surface2/50">
-                <td className="py-2 px-4">
-                  <a href={t.hubspotUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline font-medium">
-                    {t.subject || "(sin asunto)"}
-                  </a>
-                </td>
-                <td className="py-2 px-3 text-muted">{t.branch || "—"}</td>
-                <td className="py-2 px-3 text-muted">{t.pipelineName}</td>
-                <td className="py-2 px-3 text-muted">{t.stageLabel}</td>
-                <td className="py-2 px-4 text-right font-mono font-semibold" style={{ color: target !== null && t.daysOpen > target * 2 ? "#e63323" : "#6a6862" }}>
-                  {t.daysOpen}d
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {tickets.length > 5 && (
-        <button
-          onClick={() => setExpanded((v) => !v)}
-          className="w-full py-2 text-[11px] text-accent hover:bg-surface2 font-medium border-t border-border"
-        >
-          {expanded ? "Ver menos" : `Ver los ${tickets.length} (${tickets.length - 5} más)`}
-        </button>
+      </button>
+      {open && (
+        <>
+          <div className="overflow-x-auto border-t border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-surface2 text-muted uppercase tracking-wider text-[10px]">
+                <tr>
+                  <th className="text-left py-2 px-4">Motivo</th>
+                  <th className="text-left py-2 px-3">Sucursal</th>
+                  <th className="text-left py-2 px-3">Área</th>
+                  <th className="text-left py-2 px-3">Etapa</th>
+                  <th className="text-left py-2 px-3">Responsable</th>
+                  <th className="text-right py-2 px-4">Días abiertos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((t) => (
+                  <tr key={t.id} className="border-t border-border hover:bg-surface2/50">
+                    <td className="py-2 px-4">
+                      <a href={t.hubspotUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline font-medium">
+                        {t.subject || "(sin asunto)"}
+                      </a>
+                    </td>
+                    <td className="py-2 px-3 text-muted">{t.branch || "—"}</td>
+                    <td className="py-2 px-3 text-muted">{t.pipelineName}</td>
+                    <td className="py-2 px-3 text-muted">{t.stageLabel}</td>
+                    <td className="py-2 px-3 text-muted whitespace-nowrap">{t.ownerName || "Sin asignar"}</td>
+                    <td className="py-2 px-4 text-right font-mono font-semibold" style={{ color: target !== null && t.daysOpen > target * 2 ? "#e63323" : "#6a6862" }}>
+                      {t.daysOpen}d
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {tickets.length > 5 && (
+            <button
+              onClick={() => setShowAll((v) => !v)}
+              className="w-full py-2 text-[11px] text-accent hover:bg-surface2 font-medium border-t border-border"
+            >
+              {showAll ? "Ver menos" : `Ver los ${tickets.length} (${tickets.length - 5} más)`}
+            </button>
+          )}
+        </>
       )}
     </div>
   );
