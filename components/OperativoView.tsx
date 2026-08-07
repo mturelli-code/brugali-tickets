@@ -92,6 +92,9 @@ function buildQuarters(from: Date, now: Date) {
 
 type EffectiveOwnerInfo = { ownerName: string; reasonText: string; daysWaiting: number };
 
+// Orden de la tabla "Carga por responsable"
+type OwnerSortKey = "name" | "total" | "open" | "closed" | "rate" | "delayed";
+
 export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners = {} }: { tickets: SerializedTicket[]; fetchedAt: string; effectiveOwners?: Record<string, EffectiveOwnerInfo> }) {
   // Rehidratar fechas una sola vez
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
@@ -108,9 +111,14 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
   const [endDate, setEndDate] = useState<string>(toInputDate(defaultTo));
   const [activePreset, setActivePreset] = useState<string>(currentQuarter.key);
 
-  // Filtros de contenido (busqueda + area)
+  // Filtro de contenido (busqueda)
   const [searchText, setSearchText] = useState<string>("");
-  const [areaFilter, setAreaFilter] = useState<string | null>(null);
+
+  // Orden de la tabla de carga por responsable
+  const [ownerSort, setOwnerSort] = useState<{ key: OwnerSortKey; asc: boolean }>({ key: "delayed", asc: false });
+
+  // Sucursales colapsable (desplegable)
+  const [branchOpen, setBranchOpen] = useState<boolean>(false);
 
   // Aplicar presets
   function applyPreset(key: string) {
@@ -155,19 +163,9 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
     );
   }, [allTickets, startDate, endDate]);
 
-  // Areas disponibles para el filtro (pipelineId -> nombre)
-  const areaOptions = useMemo(() => {
-    const m = new Map<string, string>();
-    allTickets.forEach((t) => { if (t.pipelineId) m.set(t.pipelineId, t.pipelineName); });
-    return Array.from(m.entries())
-      .map(([id, name]) => ({ id, name }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [allTickets]);
-
-  // Aplicar busqueda y filtro de area sobre el periodo
+  // Aplicar busqueda sobre el periodo
   const viewTickets = useMemo(() => {
     let arr = periodTickets;
-    if (areaFilter) arr = arr.filter((t) => t.pipelineId === areaFilter);
     const q = searchText.trim().toLowerCase();
     if (q) {
       arr = arr.filter((t) =>
@@ -178,7 +176,7 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
       );
     }
     return arr;
-  }, [periodTickets, areaFilter, searchText]);
+  }, [periodTickets, searchText]);
 
   // KPIs del periodo/filtro
   const kpis = useMemo(() => {
@@ -201,24 +199,50 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
   const areaList = Object.values(areas).filter((a) => a.total > 0);
   const totalFiltered = viewTickets.length;
   const totalAll = allTickets.length;
-  const hasContentFilter = !!searchText.trim() || !!areaFilter;
+  const hasContentFilter = !!searchText.trim();
 
   // Carga por responsable (owner). Se agrupa por ownerId; el nombre puede venir
   // como "ID:xxx" hasta que HubSpot resuelva los nombres (permisos).
   const ownerLoad = useMemo(() => {
-    const m = new Map<string, { id: string; name: string; total: number; open: number; closed: number; delayed: number }>();
+    const m = new Map<string, { id: string; name: string; total: number; open: number; closed: number; delayed: number; rate: number }>();
     for (const t of viewTickets) {
       const id = t.ownerId || "__none__";
       const name = t.ownerName || "Sin asignar";
       let e = m.get(id);
-      if (!e) { e = { id, name, total: 0, open: 0, closed: 0, delayed: 0 }; m.set(id, e); }
+      if (!e) { e = { id, name, total: 0, open: 0, closed: 0, delayed: 0, rate: 0 }; m.set(id, e); }
       e.total++;
       if (t.isOpen) e.open++;
       if (t.isClosed) e.closed++;
       if (t.isDelayed) e.delayed++;
     }
-    return Array.from(m.values()).sort((a, b) => b.delayed - a.delayed || b.total - a.total);
+    const arr = Array.from(m.values());
+    arr.forEach((e) => { e.rate = e.total ? Math.round((e.closed / e.total) * 100) : 0; });
+    return arr;
   }, [viewTickets]);
+
+  // Aplicar orden elegido a la tabla de carga por responsable
+  const ownerLoadSorted = useMemo(() => {
+    const arr = [...ownerLoad];
+    const { key, asc } = ownerSort;
+    arr.sort((a, b) => {
+      if (key === "name") {
+        return asc ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name);
+      }
+      const va = a[key] as number;
+      const vb = b[key] as number;
+      // Desempate secundario: total desc
+      return (asc ? va - vb : vb - va) || (b.total - a.total);
+    });
+    return arr;
+  }, [ownerLoad, ownerSort]);
+
+  function toggleOwnerSort(key: OwnerSortKey) {
+    setOwnerSort((prev) =>
+      prev.key === key
+        ? { key, asc: !prev.asc }
+        : { key, asc: key === "name" } // nombre arranca A→Z, numeros de mayor a menor
+    );
+  }
 
   function PresetBtn({ k, label }: { k: string; label: string }) {
     const active = activePreset === k;
@@ -233,6 +257,20 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
       >
         {label}
       </button>
+    );
+  }
+
+  // Header clickeable de la tabla de carga por responsable
+  function OwnerTh({ col, label, right }: { col: OwnerSortKey; label: string; right?: boolean }) {
+    const active = ownerSort.key === col;
+    const arrow = active ? (ownerSort.asc ? " ↑" : " ↓") : "";
+    return (
+      <th
+        onClick={() => toggleOwnerSort(col)}
+        className={`py-3 px-3 cursor-pointer select-none hover:text-accent whitespace-nowrap ${active ? "text-accent" : ""} ${right ? "text-right" : "text-left"}`}
+      >
+        {label}{arrow}
+      </th>
     );
   }
 
@@ -310,7 +348,7 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
           </div>
         </div>
 
-        {/* Búsqueda + filtro de área */}
+        {/* Búsqueda */}
         <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-border">
           <div className="relative flex-1 min-w-[220px] max-w-md">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted text-xs">🔍</span>
@@ -322,38 +360,9 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
               className="w-full pl-9 pr-3 py-2 text-sm border border-border rounded-lg bg-bg focus:outline-none focus:border-accent transition-colors"
             />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">Área:</span>
-            <button
-              onClick={() => setAreaFilter(null)}
-              className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                areaFilter === null
-                  ? "bg-accent text-white border-accent font-semibold"
-                  : "border-border text-muted hover:border-accent hover:text-accent"
-              }`}
-            >
-              Todas
-            </button>
-            {areaOptions.map((opt) => {
-              const active = areaFilter === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  onClick={() => setAreaFilter(active ? null : opt.id)}
-                  className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                    active
-                      ? "bg-accent text-white border-accent font-semibold"
-                      : "border-border text-muted hover:border-accent hover:text-accent"
-                  }`}
-                >
-                  {opt.name}
-                </button>
-              );
-            })}
-          </div>
           {hasContentFilter && (
             <button
-              onClick={() => { setSearchText(""); setAreaFilter(null); }}
+              onClick={() => { setSearchText(""); }}
               className="px-3 py-1.5 text-xs rounded-lg border border-border text-muted hover:bg-surface2 transition-colors"
             >
               ✕ Limpiar
@@ -446,10 +455,10 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
         <div className="flex items-baseline justify-between mb-4 gap-3 flex-wrap">
           <h2 className="font-serif font-bold text-xl text-accent">Carga por responsable</h2>
           <span className="text-xs text-muted">
-            Tickets por owner en el período/filtro. Si aparece un ID en vez del nombre, es porque HubSpot todavía no resolvió ese owner.
+            Tickets por owner en el período/filtro. Cliqueá una columna para ordenar. Si aparece un ID en vez del nombre, es porque HubSpot todavía no resolvió ese owner.
           </span>
         </div>
-        {ownerLoad.length === 0 ? (
+        {ownerLoadSorted.length === 0 ? (
           <div className="bg-surface border border-border rounded-xl p-6 text-center text-muted text-sm">
             No hay tickets en el período seleccionado.
           </div>
@@ -458,20 +467,19 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
             <table className="w-full text-sm">
               <thead className="bg-surface2 text-muted uppercase tracking-wider text-xs">
                 <tr>
-                  <th className="py-3 px-3 text-left whitespace-nowrap">Responsable</th>
-                  <th className="py-3 px-3 text-right whitespace-nowrap">Total</th>
-                  <th className="py-3 px-3 text-right whitespace-nowrap">Abiertos</th>
-                  <th className="py-3 px-3 text-right whitespace-nowrap">Cerrados</th>
-                  <th className="py-3 px-3 text-right whitespace-nowrap">% cierre</th>
-                  <th className="py-3 px-3 text-right whitespace-nowrap">Demorados</th>
+                  <OwnerTh col="name" label="Responsable" />
+                  <OwnerTh col="total" label="Total" right />
+                  <OwnerTh col="open" label="Abiertos" right />
+                  <OwnerTh col="closed" label="Cerrados" right />
+                  <OwnerTh col="rate" label="% cierre" right />
+                  <OwnerTh col="delayed" label="Demorados" right />
                 </tr>
               </thead>
               <tbody>
-                {ownerLoad.map((o) => {
-                  const rate = o.total ? Math.round((o.closed / o.total) * 100) : 0;
+                {ownerLoadSorted.map((o) => {
                   const rateColor =
-                    rate >= 75 ? "text-brugaligreen"
-                    : rate >= 50 ? "text-brugaliamber"
+                    o.rate >= 75 ? "text-brugaligreen"
+                    : o.rate >= 50 ? "text-brugaliamber"
                     : "text-brugalired";
                   return (
                     <tr key={o.id} className="border-t border-border">
@@ -479,7 +487,7 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
                       <td className="py-2 px-3 text-right font-mono font-semibold">{o.total}</td>
                       <td className="py-2 px-3 text-right font-mono">{o.open}</td>
                       <td className="py-2 px-3 text-right font-mono">{o.closed}</td>
-                      <td className={`py-2 px-3 text-right font-mono ${rateColor}`}>{rate}%</td>
+                      <td className={`py-2 px-3 text-right font-mono ${rateColor}`}>{o.rate}%</td>
                       <td className="py-2 px-3 text-right font-mono">
                         {o.delayed > 0 ? (
                           <span className="text-brugalired font-semibold">{o.delayed}</span>
@@ -496,16 +504,29 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
         )}
       </section>
 
-      {/* Tabla por sucursal */}
+      {/* Tabla por sucursal — desplegable */}
       <section>
-        <h2 className="font-serif font-bold text-xl text-accent mb-4">
-          Por sucursal — período seleccionado
-        </h2>
-        <BranchTable branches={branches} />
-        <p className="text-xs text-dim mt-2">
-          Cliqueá la fila de una sucursal para ver el desglose por área y los tickets demorados.
-          Se excluyen tickets sin sucursal asignada (código 99).
-        </p>
+        <button
+          onClick={() => setBranchOpen((v) => !v)}
+          className="w-full flex items-center justify-between gap-3 text-left"
+        >
+          <h2 className="font-serif font-bold text-xl text-accent flex items-center gap-2">
+            <span className={`text-sm transition-transform inline-block font-mono ${branchOpen ? "rotate-90" : ""}`}>▶</span>
+            Por sucursal — período seleccionado
+          </h2>
+          <span className="text-xs text-muted whitespace-nowrap">
+            {branchOpen ? "Ocultar" : `Ver ${branches.length} sucursal${branches.length !== 1 ? "es" : ""}`}
+          </span>
+        </button>
+        {branchOpen && (
+          <div className="mt-4">
+            <BranchTable branches={branches} />
+            <p className="text-xs text-dim mt-2">
+              Cliqueá la fila de una sucursal para ver el desglose por área y los tickets demorados.
+              Se excluyen tickets sin sucursal asignada (código 99).
+            </p>
+          </div>
+        )}
       </section>
     </div>
   );
