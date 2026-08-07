@@ -4,6 +4,7 @@ import type { Ticket, DelaySource } from "@/lib/hubspot";
 import { DELAY_COLORS, DELAY_LABELS } from "@/lib/hubspot";
 import { fmtDate } from "@/lib/analytics";
 import LastUpdate from "@/components/LastUpdate";
+import PeriodFilter, { startOfDay, endOfDay } from "@/components/PeriodFilter";
 
 type SerializedTicket = Omit<
   Ticket,
@@ -76,13 +77,19 @@ export default function SeguimientoView({
 }) {
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
 
-  const delayedTickets = useMemo(
-    () =>
-      allTickets.filter(
-        (t) => t.quarter === 2 && t.isOpen && t.isDelayed
-      ),
-    [allTickets]
-  );
+  // Filtro de período (por defecto "Todo" para no ocultar demorados viejos aún abiertos).
+  const [range, setRange] = useState<{ from: string; to: string } | null>(null);
+
+  const delayedTickets = useMemo(() => {
+    const base = allTickets.filter((t) => t.isOpen && t.isDelayed);
+    if (!range) return base;
+    const fromMs = startOfDay(new Date(range.from)).getTime();
+    const toMs = endOfDay(new Date(range.to)).getTime();
+    return base.filter((t) => {
+      const c = t.createdAt.getTime();
+      return c >= fromMs && c <= toMs;
+    });
+  }, [allTickets, range]);
 
   // FILTROS
   const [search, setSearch] = useState("");
@@ -352,6 +359,9 @@ export default function SeguimientoView({
         </p>
         <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
+
+      {/* FILTRO DE PERÍODO */}
+      <PeriodFilter onChange={(from, to) => setRange({ from, to })} defaultToAll />
 
       {/* FILTROS */}
       <div className="bg-surface border border-border rounded-xl p-4 space-y-3">
