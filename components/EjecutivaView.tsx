@@ -5,7 +5,7 @@ import {
   buildAreaMetrics,
   buildBranchMetrics,
   buildWeeklyTrend,
-  buildQuarterStats,
+  buildRangeStats,
   detectProductAlerts,
   lastClosedWeekRange,
   inRange,
@@ -18,6 +18,13 @@ import KpiCard from "@/components/KpiCard";
 import WeeklyTrend from "@/components/WeeklyTrend";
 import Heatmap from "@/components/Heatmap";
 import LastUpdate from "@/components/LastUpdate";
+import PeriodFilter, {
+  defaultRange,
+  buildQuarters,
+  quarterStartDate,
+  quarterEndDate,
+  DATA_START,
+} from "@/components/PeriodFilter";
 
 type SerializedTicket = Omit<
   Ticket,
@@ -95,37 +102,12 @@ export default function EjecutivaView({
     return m;
   }, [ownerHistory]);
 
-  // Filtro de fecha
-  const [startDate, setStartDate] = useState<string>(toInputDate(Q2_START));
-  const [endDate, setEndDate] = useState<string>(toInputDate(today));
-  const [activePreset, setActivePreset] = useState<string>("q2");
-
-  function applyPreset(key: string) {
-    const now = new Date();
-    let from: Date;
-    let to: Date = endOfDay(now);
-    if (key === "q2") {
-      from = Q2_START;
-    } else if (key === "7d") {
-      from = new Date(now);
-      from.setUTCDate(now.getUTCDate() - 6);
-      from = startOfDay(from);
-    } else if (key === "30d") {
-      from = new Date(now);
-      from.setUTCDate(now.getUTCDate() - 29);
-      from = startOfDay(from);
-    } else if (key === "month") {
-      from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-    } else if (key === "prev_month") {
-      from = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
-      to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0, 23, 59, 59, 999));
-    } else {
-      return;
-    }
-    setStartDate(toInputDate(from));
-    setEndDate(toInputDate(to));
-    setActivePreset(key);
-  }
+  // Filtro de período (por defecto, trimestre en curso). El componente maneja
+  // los presets dinámicos de trimestres; acá guardamos el rango elegido.
+  const initRange = useMemo(() => defaultRange(new Date()), []);
+  const [range, setRange] = useState<{ from: string; to: string }>({ from: initRange.from, to: initRange.to });
+  const startDate = range.from;
+  const endDate = range.to;
 
   // Tickets en el rango filtrado
   const filteredTickets = useMemo(() => {
@@ -143,9 +125,19 @@ export default function EjecutivaView({
   const alerts = useMemo(() => detectProductAlerts(filteredTickets), [filteredTickets]);
   // Tendencia siempre Q2 completo
   const trend = useMemo(() => buildWeeklyTrend(q2Tickets), [q2Tickets]);
-  // Q1 vs Q2 fijo
-  const q1Stats = useMemo(() => buildQuarterStats(allTickets, 1), [allTickets]);
-  const q2Stats = useMemo(() => buildQuarterStats(allTickets, 2), [allTickets]);
+  // Comparativo dinámico: stats por cada trimestre con datos (todos lado a lado).
+  const quarterStats = useMemo(() => {
+    const qs = buildQuarters(DATA_START, new Date());
+    return qs.map((q) =>
+      buildRangeStats(
+        allTickets,
+        quarterStartDate(q.year, q.q).getTime(),
+        quarterEndDate(q.year, q.q).getTime(),
+        q.key,
+        `Q${q.q} ${q.year}`
+      )
+    );
+  }, [allTickets]);
 
   const total = filteredTickets.length;
   const closed = filteredTickets.filter((t) => t.isClosed).length;
@@ -173,95 +165,23 @@ export default function EjecutivaView({
   const slaOk = closedWithSla.filter((t) => t.slaCompliant === true).length;
   const slaRate = closedWithSla.length ? Math.round((slaOk / closedWithSla.length) * 100) : null;
 
-  function PresetBtn({ k, label }: { k: string; label: string }) {
-    const active = activePreset === k;
-    return (
-      <button
-        onClick={() => applyPreset(k)}
-        className={`px-3 py-1.5 text-xs rounded-full border transition-colors whitespace-nowrap ${
-          active
-            ? "bg-accent text-white border-accent font-semibold"
-            : "border-border text-muted hover:border-accent hover:text-accent"
-        }`}
-      >
-        {label}
-      </button>
-    );
-  }
-
-  const periodLabel =
-    activePreset === "q2" ? "Q2 completo"
-    : activePreset === "7d" ? "últimos 7 días"
-    : activePreset === "30d" ? "últimos 30 días"
-    : activePreset === "month" ? "mes en curso"
-    : activePreset === "prev_month" ? "mes anterior"
-    : `${startDate} al ${endDate}`;
+  const periodLabel = `${fmtDate(new Date(startDate))} al ${fmtDate(new Date(endDate))}`;
 
   return (
     <div className="space-y-10">
       <div>
         <h1 className="font-serif font-bold text-3xl text-accent">Vista ejecutiva</h1>
         <p className="text-sm text-muted mt-1">
-          Q2 2026 al {fmtDate(today)} · {Math.floor((today.getTime() - Date.UTC(2026, 3, 1)) / 86400000)} días transcurridos
+          Panorama del service desk · datos al {fmtDate(today)}
         </p>
         <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
 
-      {/* PANEL DE FILTRO DE FECHA */}
-      <div className="bg-surface border border-border rounded-xl p-4">
-        <div className="flex flex-wrap items-center gap-3 mb-3">
-          <span className="text-[11px] uppercase tracking-wider text-muted font-semibold mr-1">
-            Período:
-          </span>
-          <PresetBtn k="q2" label="Q2 completo" />
-          <PresetBtn k="7d" label="Últimos 7 días" />
-          <PresetBtn k="30d" label="Últimos 30 días" />
-          <PresetBtn k="month" label="Mes en curso" />
-          <PresetBtn k="prev_month" label="Mes anterior" />
-        </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-muted font-semibold block mb-1">Desde</label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => { setStartDate(e.target.value); setActivePreset("custom"); }}
-              className="px-3 py-1.5 text-sm border border-border rounded-lg bg-bg focus:outline-none focus:border-accent"
-            />
-          </div>
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-muted font-semibold block mb-1">Hasta</label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => { setEndDate(e.target.value); setActivePreset("custom"); }}
-              className="px-3 py-1.5 text-sm border border-border rounded-lg bg-bg focus:outline-none focus:border-accent"
-            />
-          </div>
-          <div className="ml-auto text-[11px] text-muted">
-            Filtro aplicado: <strong className="text-text font-semibold">{periodLabel}</strong> · <strong className="font-mono text-text">{total}</strong> tickets
-          </div>
-        </div>
-      </div>
-
-      {/* Alertas Calidad arriba si hay */}
-      {alerts.length > 0 && (
-        <section>
-          <div className="bg-surface border-2 border-brugalired rounded-xl p-6">
-            <h3 className="font-serif font-bold text-base text-brugalired mb-3 flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-brugalired animate-pulse" />
-              Alertas Calidad — {alerts.length} producto{alerts.length !== 1 ? "s" : ""} con 3+ reclamos
-            </h3>
-            <ul className="space-y-2">
-              {alerts.map((a) => (
-                <li key={a.product} className="text-sm">
-                  <strong>{a.product}</strong> · {a.count} reclamos · sucursales: {a.branches.join(" · ") || "—"}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
-      )}
+      {/* PANEL DE FILTRO DE PERÍODO */}
+      <PeriodFilter
+        onChange={(from, to) => setRange({ from, to })}
+        rightInfo={<>Filtro aplicado: <strong className="text-text font-semibold">{periodLabel}</strong> · <strong className="font-mono text-text">{total}</strong> tickets</>}
+      />
 
       {/* KPIs del período */}
       <section>
@@ -519,89 +439,97 @@ export default function EjecutivaView({
       </section>
       )}
 
-      {/* Q1 vs Q2 (fijo) */}
+      {/* Comparativo dinámico por trimestre (todos los Q lado a lado) */}
       <section>
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
-          <h2 className="font-serif font-bold text-xl text-accent">Comparativo Q1 vs Q2</h2>
-          <span className="text-[11px] text-dim">No depende del filtro — comparativa trimestral fija.</span>
+          <h2 className="font-serif font-bold text-xl text-accent">Comparativo por trimestre</h2>
+          <span className="text-[11px] text-dim">No depende del filtro — cada Q aparece solo cuando entra en curso.</span>
         </div>
         <div className="bg-surface border border-border rounded-xl p-6 space-y-6">
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-            {[
-              { label: "Tickets", q1v: q1Stats.total, q2v: q2Stats.total, fmt: (v: number) => String(v), higherIsBetter: false },
-              { label: "% Cierre", q1v: q1Stats.closeRate, q2v: q2Stats.closeRate, fmt: (v: number) => `${v.toFixed(1)}%`, higherIsBetter: true },
-              { label: "Días resolución", q1v: q1Stats.avgResolutionDays ?? 0, q2v: q2Stats.avgResolutionDays ?? 0, fmt: (v: number) => v ? `${v.toFixed(1)}d` : "—", higherIsBetter: false },
-              { label: "SLA cumplido", q1v: q1Stats.slaCompliance ?? 0, q2v: q2Stats.slaCompliance ?? 0, fmt: (v: number) => v ? `${v.toFixed(1)}%` : "—", higherIsBetter: true },
-            ].map(({ label, q1v, q2v, fmt, higherIsBetter }) => {
-              const improved = higherIsBetter ? q2v > q1v : q2v < q1v;
-              const same = Math.abs(q2v - q1v) < 0.5;
-              const trendColor = same ? "text-muted" : improved ? "text-brugaligreen" : "text-brugalired";
-              const trendArrow = same ? "→" : improved ? "↑" : "↓";
-              return (
-                <div key={label} className="rounded-lg bg-surface2 p-4">
-                  <div className="text-xs text-muted uppercase tracking-wider mb-2">{label}</div>
-                  <div className="flex items-end gap-3">
-                    <div>
-                      <div className="text-xs text-dim mb-0.5">Q1</div>
-                      <div className="font-mono font-semibold text-lg text-muted">{fmt(q1v)}</div>
-                    </div>
-                    <div className={`text-xl font-bold pb-0.5 ${trendColor}`}>{trendArrow}</div>
-                    <div>
-                      <div className="text-xs text-dim mb-0.5">Q2</div>
-                      <div className="font-mono font-semibold text-lg text-accent">{fmt(q2v)}</div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+          {/* Resumen por trimestre */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-surface2 text-muted uppercase tracking-wider text-xs">
+                <tr>
+                  <th className="text-left py-2 px-3">Trimestre</th>
+                  <th className="text-right py-2 px-3">Tickets</th>
+                  <th className="text-right py-2 px-3">% Cierre</th>
+                  <th className="text-right py-2 px-3">Días resolución</th>
+                  <th className="text-right py-2 px-3">SLA cumplido</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quarterStats.map((q, i) => {
+                  const prev = i > 0 ? quarterStats[i - 1] : null;
+                  const diff = prev ? q.closeRate - prev.closeRate : null;
+                  const trendColor = diff === null ? "" : diff > 2 ? "text-brugaligreen" : diff < -2 ? "text-brugalired" : "text-muted";
+                  const isLast = i === quarterStats.length - 1;
+                  return (
+                    <tr key={q.key} className="border-t border-border">
+                      <td className={`py-2 px-3 font-medium ${isLast ? "text-accent" : ""}`}>
+                        {q.label}{isLast ? " (en curso)" : ""}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono">{q.total}</td>
+                      <td className={`py-2 px-3 text-right font-mono ${trendColor}`}>
+                        {q.closeRate.toFixed(1)}%
+                        {diff !== null && Math.abs(diff) >= 0.1 && (
+                          <span className="text-[10px]"> ({diff > 0 ? "+" : ""}{diff.toFixed(1)}pp)</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono">
+                        {q.avgResolutionDays !== null ? `${q.avgResolutionDays.toFixed(1)}d` : "—"}
+                      </td>
+                      <td className="py-2 px-3 text-right font-mono">
+                        {q.slaCompliance !== null ? `${q.slaCompliance.toFixed(1)}%` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
 
+          {/* % cierre por área y trimestre */}
           <div>
             <h4 className="text-xs uppercase tracking-wider text-muted font-semibold mb-3">
-              Por área — % cierre y SLA
+              % cierre por área y trimestre
             </h4>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-surface2 text-muted uppercase tracking-wider text-xs">
                   <tr>
                     <th className="text-left py-2 px-3">Área</th>
-                    <th className="text-right py-2 px-3">Q1 tickets</th>
-                    <th className="text-right py-2 px-3">Q1 cierre</th>
-                    <th className="text-right py-2 px-3">Q1 SLA</th>
-                    <th className="text-right py-2 px-3">Q2 tickets</th>
-                    <th className="text-right py-2 px-3">Q2 cierre</th>
-                    <th className="text-right py-2 px-3">Q2 SLA</th>
-                    <th className="text-right py-2 px-3">Tendencia cierre</th>
+                    {quarterStats.map((q) => (
+                      <th key={q.key} className="text-right py-2 px-3">{q.label}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
                   {AREA_NAMES.map((name) => {
-                    const a1 = q1Stats.byArea[name];
-                    const a2 = q2Stats.byArea[name];
-                    if (!a1 || !a2) return null;
-                    const diff = a2.closeRate - a1.closeRate;
-                    const trendColor = diff > 2 ? "text-brugaligreen" : diff < -2 ? "text-brugalired" : "text-muted";
-                    const trendText = diff > 0 ? `↑ +${diff.toFixed(1)}pp` : diff < 0 ? `↓ ${diff.toFixed(1)}pp` : "→ sin cambio";
+                    const cells = quarterStats.map((q) => q.byArea[name]);
+                    if (cells.every((c) => !c || c.total === 0)) return null;
                     return (
                       <tr key={name} className="border-t border-border">
                         <td className="py-2 px-3 font-medium">{name}</td>
-                        <td className="py-2 px-3 text-right font-mono text-muted">{a1.total}</td>
-                        <td className="py-2 px-3 text-right font-mono text-muted">{a1.closeRate.toFixed(1)}%</td>
-                        <td className="py-2 px-3 text-right font-mono text-muted">
-                          {a1.slaCompliance !== null ? `${a1.slaCompliance.toFixed(1)}%` : "—"}
-                        </td>
-                        <td className="py-2 px-3 text-right font-mono">{a2.total}</td>
-                        <td className="py-2 px-3 text-right font-mono">{a2.closeRate.toFixed(1)}%</td>
-                        <td className="py-2 px-3 text-right font-mono">
-                          {a2.slaCompliance !== null ? `${a2.slaCompliance.toFixed(1)}%` : "—"}
-                        </td>
-                        <td className={`py-2 px-3 text-right font-semibold ${trendColor}`}>{trendText}</td>
+                        {cells.map((c, i) => (
+                          <td key={i} className="py-2 px-3 text-right font-mono">
+                            {c && c.total > 0 ? (
+                              <>
+                                {c.closeRate.toFixed(0)}%
+                                <span className="text-dim text-[10px]"> ({c.total})</span>
+                              </>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+                        ))}
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
             </div>
+            <p className="text-[11px] text-dim mt-2">Cada celda: % de cierre y, entre paréntesis, la cantidad de tickets del trimestre.</p>
           </div>
         </div>
       </section>
