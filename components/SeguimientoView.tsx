@@ -1,10 +1,83 @@
 "use client";
 import { useState, useMemo } from "react";
-import type { Ticket, DelaySource } from "@/lib/hubspot";
-import { DELAY_COLORS, DELAY_LABELS } from "@/lib/hubspot";
-import { fmtDate } from "@/lib/analytics";
+import type { Ticket, DelaySource, PriorityLevel } from "@/lib/hubspot";
+import {
+  DELAY_COLORS, DELAY_LABELS,
+  PRIORITY_ORDER, PRIORITY_LABELS, PRIORITY_COLORS, SLA_TARGET_DAYS,
+} from "@/lib/hubspot";
+import { fmtDate, buildPriorityBacklog } from "@/lib/analytics";
 import LastUpdate from "@/components/LastUpdate";
 import PeriodFilter, { startOfDay, endOfDay } from "@/components/PeriodFilter";
+
+function BacklogGroup({ level, tickets }: { level: PriorityLevel; tickets: Ticket[] }) {
+  const [open, setOpen] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const color = PRIORITY_COLORS[level];
+  const target = SLA_TARGET_DAYS[level];
+  if (tickets.length === 0) return null;
+  const shown = showAll ? tickets : tickets.slice(0, 5);
+
+  return (
+    <div className="bg-surface border border-border rounded-xl overflow-hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-5 py-3 text-left hover:bg-surface2/40 transition-colors"
+        style={{ borderLeft: `4px solid ${color}` }}
+      >
+        <span className={`text-[10px] font-mono transition-transform inline-block ${open ? "rotate-90" : ""}`}>▶</span>
+        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }} />
+        <span className="font-serif font-bold text-sm text-text">{PRIORITY_LABELS[level]}</span>
+        <span className="text-[11px] text-muted">· meta ≤ {target}d</span>
+        <span className="ml-auto font-mono text-sm font-semibold" style={{ color }}>{tickets.length}</span>
+        <span className="text-[11px] text-muted">vencidos</span>
+      </button>
+      {open && (
+        <>
+          <div className="overflow-x-auto border-t border-border">
+            <table className="w-full text-sm">
+              <thead className="bg-surface2 text-muted uppercase tracking-wider text-[10px]">
+                <tr>
+                  <th className="text-left py-2 px-4">Motivo</th>
+                  <th className="text-left py-2 px-3">Sucursal</th>
+                  <th className="text-left py-2 px-3">Área</th>
+                  <th className="text-left py-2 px-3">Etapa</th>
+                  <th className="text-left py-2 px-3">Responsable</th>
+                  <th className="text-right py-2 px-4">Días abiertos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((t) => (
+                  <tr key={t.id} className="border-t border-border hover:bg-surface2/50">
+                    <td className="py-2 px-4">
+                      <a href={t.hubspotUrl} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline font-medium">
+                        {t.subject || "(sin asunto)"}
+                      </a>
+                    </td>
+                    <td className="py-2 px-3 text-muted">{t.branch || "—"}</td>
+                    <td className="py-2 px-3 text-muted">{t.pipelineName}</td>
+                    <td className="py-2 px-3 text-muted">{t.stageLabel}</td>
+                    <td className="py-2 px-3 text-muted whitespace-nowrap">{t.ownerName || "Sin asignar"}</td>
+                    <td className="py-2 px-4 text-right font-mono font-semibold" style={{ color: target !== null && t.daysOpen > target * 2 ? "#e63323" : "#6a6862" }}>
+                      {t.daysOpen}d
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {tickets.length > 5 && (
+            <button
+              onClick={() => setShowAll((v) => !v)}
+              className="w-full py-2 text-[11px] text-accent hover:bg-surface2 font-medium border-t border-border"
+            >
+              {showAll ? "Ver menos" : `Ver los ${tickets.length} (${tickets.length - 5} más)`}
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 type SerializedTicket = Omit<
   Ticket,
@@ -76,6 +149,10 @@ export default function SeguimientoView({
   effectiveOwners?: Record<string, EffectiveOwnerData>;
 }) {
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
+
+  // "Para traccionar": abiertos que ya pasaron su meta SLA, agrupados por urgencia.
+  const backlog = useMemo(() => buildPriorityBacklog(allTickets), [allTickets]);
+  const totalBacklog = PRIORITY_ORDER.reduce((s, l) => s + backlog[l].length, 0);
 
   // Filtro de período (por defecto "Todo" para no ocultar demorados viejos aún abiertos).
   const [range, setRange] = useState<{ from: string; to: string } | null>(null);
@@ -359,6 +436,25 @@ export default function SeguimientoView({
         </p>
         <div className="mt-2"><LastUpdate fetchedAt={fetchedAt} /></div>
       </div>
+
+      {/* PARA TRACCIONAR — abiertos que ya pasaron su meta SLA */}
+      <section>
+        <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
+          <h2 className="font-serif font-bold text-xl text-accent">Para traccionar — abiertos que pasaron su meta</h2>
+          <span className="text-[11px] text-dim">Ordenados por días abiertos. Cliqueá para abrir en HubSpot.</span>
+        </div>
+        {totalBacklog === 0 ? (
+          <div className="bg-surface border border-border rounded-xl p-6 text-center text-brugaligreen text-sm font-medium">
+            No hay tickets abiertos por encima de su meta SLA. 🎯
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {PRIORITY_ORDER.map((lvl) => (
+              <BacklogGroup key={lvl} level={lvl} tickets={backlog[lvl]} />
+            ))}
+          </div>
+        )}
+      </section>
 
       {/* FILTRO DE PERÍODO */}
       <PeriodFilter onChange={(from, to) => setRange({ from, to })} defaultToAll />
