@@ -2,8 +2,26 @@
 import { useState, useMemo, Fragment } from "react";
 import type { Ticket, OwnerHistoryMap } from "@/lib/hubspot";
 import { buildAgentDeepMetrics, fmtDate } from "@/lib/analytics";
+import { SLA_TARGET_DAYS, type PriorityLevel } from "@/lib/hubspot";
 import LastUpdate from "@/components/LastUpdate";
 import PeriodFilter, { defaultRange, startOfDay, endOfDay } from "@/components/PeriodFilter";
+
+// Niveles de urgencia con su meta de días, para las columnas de resolución por urgencia.
+const URGENCY_COLS: { level: PriorityLevel; label: string }[] = [
+  { level: "urgente", label: "Urgente" },
+  { level: "alta", label: "Alta" },
+  { level: "media", label: "Media" },
+  { level: "baja", label: "Baja" },
+];
+
+// Color de una mediana de resolución vs su meta.
+function resToneVsTarget(v: number | null, target: number | null): string {
+  if (v === null) return "text-dim";
+  if (target === null) return "text-text";
+  if (v <= target) return "text-brugaligreen font-semibold";
+  if (v <= target * 1.5) return "text-brugaliamber";
+  return "text-brugalired font-semibold";
+}
 
 type SerializedTicket = Omit<
   Ticket,
@@ -279,6 +297,12 @@ export default function AgentesView({
                 <Th col="totalTouched" label="Tickets" right />
                 <Th col="avgHolding" label="Días prom. sosteniendo" right />
                 <Th col="avgResolution" label="Tiempo resolución" right />
+                {URGENCY_COLS.map((u) => (
+                  <th key={u.level} className="py-3 px-3 text-right whitespace-nowrap" title={`Mediana de resolución de tickets ${u.label} que cerró · meta ≤ ${SLA_TARGET_DAYS[u.level]}d`}>
+                    {u.label}
+                    <span className="block text-[9px] text-dim font-normal normal-case">≤{SLA_TARGET_DAYS[u.level]}d</span>
+                  </th>
+                ))}
                 <Th col="fastResponse" label="% &lt;2d" right />
                 <th className="text-left py-3 px-3">Donde más se traba</th>
               </tr>
@@ -324,6 +348,14 @@ export default function AgentesView({
                       <td className="py-2.5 px-3 text-right font-mono text-muted">
                         {a.avgResolutionDays !== null ? `${a.avgResolutionDays.toFixed(1)}d` : "—"}
                       </td>
+                      {URGENCY_COLS.map((u) => {
+                        const v = a.resolutionByPriority[u.level];
+                        return (
+                          <td key={u.level} className={`py-2.5 px-3 text-right font-mono ${resToneVsTarget(v, SLA_TARGET_DAYS[u.level])}`}>
+                            {v !== null ? `${v.toFixed(1)}d` : "—"}
+                          </td>
+                        );
+                      })}
                       <td className={`py-2.5 px-3 text-right font-mono ${fastTone}`}>
                         {a.fastResponseRate !== null ? `${a.fastResponseRate.toFixed(0)}%` : "—"}
                       </td>
@@ -338,7 +370,7 @@ export default function AgentesView({
                     </tr>
                     {isExp && (
                       <tr className="bg-surface2/30 border-t border-border">
-                        <td colSpan={8} className="px-6 py-4">
+                        <td colSpan={12} className="px-6 py-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                               <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-2">Tickets por embudo</div>
@@ -398,6 +430,7 @@ export default function AgentesView({
           <div><strong>Tiempo resolución</strong>: tiempo promedio que tardaron en cerrar los tickets que él cerró.</div>
           <div><strong>% &lt;2d</strong>: porcentaje de "stints" (períodos asignado) que duraron menos de 2 días — alta = pasa rápido, baja = sostiene mucho.</div>
           <div><strong>Donde más se traba</strong>: el embudo donde sus stints duran más días promedio (cuello de botella temático).</div>
+          <div><strong>Urgente / Alta / Media / Baja</strong>: mediana de días que tardó en cerrar los tickets de ese nivel de urgencia. Verde = dentro de la meta (≤ meta), ámbar = hasta 1,5× la meta, rojo = por encima. "—" si no cerró tickets de ese nivel en el período.</div>
         </div>
       </section>
     </div>
