@@ -94,7 +94,8 @@ export default function DireccionView({
   const total = periodTickets.length;
   const closed = periodTickets.filter((t) => t.isClosed).length;
   const closeRate = total ? Math.round((closed / total) * 100) : 0;
-  const neto = total - closed; // ingresados que aún no cerraron (de este período)
+  const open = periodTickets.filter((t) => t.isOpen).length; // realmente sin cerrar
+  const noCorresp = periodTickets.filter((t) => t.isNoCorresp).length; // cerrados como "no corresponde"
 
   const closedInPeriod = periodTickets.filter((t) => t.isClosed && t.closedAt);
   const resolutionDays = closedInPeriod.map((t) => (t.closedAt!.getTime() - t.createdAt.getTime()) / 86400000);
@@ -222,13 +223,14 @@ export default function DireccionView({
           <h2 className="font-serif font-bold text-xl text-accent">Ingresos y resolución — {periodLabel}</h2>
           <span className="text-[11px] text-dim">Cuánto trabajo entra, cuánto se resuelve y a qué velocidad.</span>
         </div>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           <KpiCard label="Ingresados" value={String(total)} sub="en el período" />
           <KpiCard label="Cerrados" value={String(closed)} sub={`${closeRate}% de cierre`} color={closeRate >= 75 ? "text-brugaligreen" : closeRate >= 50 ? "text-brugaliamber" : "text-brugalired"} />
-          <KpiCard label="Sin cerrar" value={String(neto)} sub="del período, aún abiertos" color={neto === 0 ? "text-brugaligreen" : "text-text"} />
+          <KpiCard label="Abiertos" value={String(open)} sub="del período, aún sin cerrar" color={open === 0 ? "text-brugaligreen" : "text-text"} />
+          <KpiCard label="No corresponde" value={String(noCorresp)} sub="cerrados sin acción" color={noCorresp > 0 ? "text-brugaliamber" : "text-muted"} />
           <KpiCard label="Mediana resolución" value={medianResolution !== null ? `${medianResolution.toFixed(1)}d` : "s/d"} sub={avgResolution !== null ? `prom. ${avgResolution.toFixed(1)}d` : "sin cierres"} />
           <KpiCard label="Backlog hoy" value={String(backlogNow)} sub={`${delayedNow} demorados`} color={delayedNow >= 5 ? "text-brugalired" : delayedNow > 0 ? "text-brugaliamber" : "text-brugaligreen"} />
-          <KpiCard label="SLA cumplido" value={slaRate === null ? "s/d" : `${slaRate}%`} sub={slaEval.length ? `sobre ${slaEval.length} cerrados` : "sin datos"} color={slaRate === null ? "text-muted" : slaRate >= 80 ? "text-brugaligreen" : slaRate >= 60 ? "text-brugaliamber" : "text-brugalired"} />
+          <KpiCard label="En plazo" value={slaRate === null ? "s/d" : `${slaRate}%`} sub={slaEval.length ? `de ${slaEval.length} cerrados a tiempo` : "sin datos"} color={slaRate === null ? "text-muted" : slaRate >= 80 ? "text-brugaligreen" : slaRate >= 60 ? "text-brugaliamber" : "text-brugalired"} />
         </div>
         <div className="bg-surface border border-border rounded-xl p-6 mt-4">
           <div className="text-[11px] uppercase tracking-wider text-muted font-semibold mb-3">Ingresados vs cerrados por mes (últimos 8 meses)</div>
@@ -265,7 +267,7 @@ export default function DireccionView({
                 <th className="text-right py-3 px-3">Tickets</th>
                 <th className="text-right py-3 px-3">% Cierre</th>
                 <th className="text-right py-3 px-3">Días resolución</th>
-                <th className="text-right py-3 px-3">SLA cumplido</th>
+                <th className="text-right py-3 px-3">En plazo</th>
               </tr>
             </thead>
             <tbody>
@@ -313,7 +315,7 @@ export default function DireccionView({
                 <th className="text-right py-3 px-3">Meta</th>
                 <th className="text-right py-3 px-3">Mediana cierre</th>
                 <th className="text-right py-3 px-3">Promedio</th>
-                <th className="text-right py-3 px-3">% en SLA</th>
+                <th className="text-right py-3 px-3">% en plazo</th>
                 <th className="text-right py-3 px-3">Cerrados</th>
                 <th className="text-right py-3 px-3">Abiertos vencidos</th>
                 <th className="text-right py-3 px-3">Estado</th>
@@ -464,7 +466,7 @@ export default function DireccionView({
                 <th className="text-right py-3 px-3">Cerrados</th>
                 <th className="text-right py-3 px-3">% Cierre</th>
                 <th className="text-right py-3 px-3">Días resolución</th>
-                <th className="text-right py-3 px-3">SLA cumplido</th>
+                <th className="text-right py-3 px-3">En plazo</th>
               </tr>
             </thead>
             <tbody>
