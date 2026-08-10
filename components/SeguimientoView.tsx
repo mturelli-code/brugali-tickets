@@ -174,6 +174,15 @@ export default function SeguimientoView({
   const [activeOriginEmbudo, setActiveOriginEmbudo] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<DelaySource | null>(null);
   const [expandedTicketId, setExpandedTicketId] = useState<string | null>(null);
+  // Grupos por responsable: colapsados por defecto (desplegables).
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  function toggleGroup(id: string) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   const areasOrigin = useMemo(() => {
     const s = new Set<string>();
@@ -537,11 +546,16 @@ export default function SeguimientoView({
         <div className="space-y-4">
           {finalGroups.map((g) => {
             const breakdownByOrigin = Object.entries(g.byOriginEmbudo).sort((a, b) => b[1] - a[1]);
+            const isOpen = openGroups.has(g.ownerId);
             return (
               <div key={g.ownerId} className="bg-surface border border-border rounded-xl overflow-hidden">
-                {/* Header del grupo */}
-                <div className="bg-surface2 px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3">
+                {/* Header del grupo (desplegable) */}
+                <button
+                  onClick={() => toggleGroup(g.ownerId)}
+                  className="w-full text-left bg-surface2 px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-3 hover:bg-surface2/70 transition-colors"
+                >
                   <div className="flex items-center gap-3">
+                    <span className={`text-xs font-mono text-muted transition-transform inline-block ${isOpen ? "rotate-90" : ""}`}>▶</span>
                     <div className="w-10 h-10 rounded-full bg-accent/10 text-accent flex items-center justify-center font-bold flex-shrink-0">
                       {g.ownerName.charAt(0).toUpperCase()}
                     </div>
@@ -549,6 +563,7 @@ export default function SeguimientoView({
                       <div className="font-semibold text-base">{g.ownerName}</div>
                       <div className="text-[11px] text-muted">
                         Hay que empujarlo/a por <strong>{g.tickets.length}</strong> ticket{g.tickets.length !== 1 ? "s" : ""}
+                        {!isOpen && <span className="ml-1">· tocá para ver</span>}
                       </div>
                     </div>
                   </div>
@@ -562,12 +577,14 @@ export default function SeguimientoView({
                       </span>
                     ))}
                   </div>
-                </div>
+                </button>
 
                 {/* Tickets */}
-                <div>
-                  {g.tickets.map((t) => <TicketCard key={t.id} t={t} />)}
-                </div>
+                {isOpen && (
+                  <div>
+                    {g.tickets.map((t) => <TicketCard key={t.id} t={t} />)}
+                  </div>
+                )}
               </div>
             );
           })}
