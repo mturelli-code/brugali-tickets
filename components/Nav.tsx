@@ -18,7 +18,7 @@ export default function Nav() {
     const isTiempos = pathname.startsWith("/direccion/tiempos");
     const DIR_TABS = [
       { href: "/direccion", label: "Resumen", active: !isAgentes && !isTiempos },
-      { href: "/direccion/tiempos", label: "Tiempos y SLA", active: isTiempos },
+      { href: "/direccion/tiempos", label: "Tiempos y plazos", active: isTiempos },
       { href: "/direccion/agentes", label: "Agentes", active: isAgentes },
     ];
     return (
