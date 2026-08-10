@@ -93,7 +93,7 @@ function buildQuarters(from: Date, now: Date) {
 type EffectiveOwnerInfo = { ownerName: string; reasonText: string; daysWaiting: number };
 
 // Orden de la tabla "Carga por responsable"
-type OwnerSortKey = "name" | "total" | "open" | "closed" | "rate" | "delayed";
+type OwnerSortKey = "name" | "total" | "open" | "closed" | "rate" | "delayed" | "nc";
 
 export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners = {} }: { tickets: SerializedTicket[]; fetchedAt: string; effectiveOwners?: Record<string, EffectiveOwnerInfo> }) {
   // Rehidratar fechas una sola vez
@@ -184,11 +184,12 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
     const closed = viewTickets.filter((t) => t.isClosed).length;
     const open = viewTickets.filter((t) => t.isOpen).length;
     const delayed = viewTickets.filter((t) => t.isDelayed).length;
+    const noCorresp = viewTickets.filter((t) => t.isNoCorresp).length;
     const slaEval = viewTickets.filter((t) => t.slaCompliant !== null);
     const slaOk = slaEval.filter((t) => t.slaCompliant === true).length;
     const closeRate = total ? Math.round((closed / total) * 100) : 0;
     const slaRate = slaEval.length ? Math.round((slaOk / slaEval.length) * 100) : null;
-    return { total, closed, open, delayed, closeRate, slaRate, slaEvalCount: slaEval.length };
+    return { total, closed, open, delayed, noCorresp, closeRate, slaRate, slaEvalCount: slaEval.length };
   }, [viewTickets]);
 
   // Recalcular métricas con los tickets filtrados
@@ -204,15 +205,16 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
   // Carga por responsable (owner). Se agrupa por ownerId; el nombre puede venir
   // como "ID:xxx" hasta que HubSpot resuelva los nombres (permisos).
   const ownerLoad = useMemo(() => {
-    const m = new Map<string, { id: string; name: string; total: number; open: number; closed: number; delayed: number; rate: number }>();
+    const m = new Map<string, { id: string; name: string; total: number; open: number; closed: number; delayed: number; nc: number; rate: number }>();
     for (const t of viewTickets) {
       const id = t.ownerId || "__none__";
       const name = t.ownerName || "Sin asignar";
       let e = m.get(id);
-      if (!e) { e = { id, name, total: 0, open: 0, closed: 0, delayed: 0, rate: 0 }; m.set(id, e); }
+      if (!e) { e = { id, name, total: 0, open: 0, closed: 0, delayed: 0, nc: 0, rate: 0 }; m.set(id, e); }
       e.total++;
       if (t.isOpen) e.open++;
       if (t.isClosed) e.closed++;
+      if (t.isNoCorresp) e.nc++;
       if (t.isDelayed) e.delayed++;
     }
     const arr = Array.from(m.values());
@@ -372,10 +374,11 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
       </div>
 
       {/* FILA DE KPIs */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <KpiCard label="Tickets" value={String(kpis.total)} sub="en el período/filtro" />
         <KpiCard label="Cerrados" value={String(kpis.closed)} sub={`${kpis.closeRate}% del total`} color={kpis.closeRate >= 75 ? "text-brugaligreen" : kpis.closeRate >= 50 ? "text-brugaliamber" : "text-brugalired"} />
         <KpiCard label="Abiertos" value={String(kpis.open)} sub="sin cerrar" />
+        <KpiCard label="No corresponde" value={String(kpis.noCorresp)} sub="cerrados sin acción" color={kpis.noCorresp > 0 ? "text-brugaliamber" : "text-muted"} />
         <KpiCard label="Demorados +7d" value={String(kpis.delayed)} sub="abiertos con demora" color={kpis.delayed === 0 ? "text-brugaligreen" : kpis.delayed >= 5 ? "text-brugalired" : "text-brugaliamber"} />
         <KpiCard label="Cumplimiento SLA" value={kpis.slaRate === null ? "s/d" : `${kpis.slaRate}%`} sub={kpis.slaEvalCount ? `sobre ${kpis.slaEvalCount} con SLA` : "sin datos"} color={kpis.slaRate === null ? "text-muted" : kpis.slaRate >= 75 ? "text-brugaligreen" : kpis.slaRate >= 50 ? "text-brugaliamber" : "text-brugalired"} />
       </div>
@@ -471,6 +474,7 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
                   <OwnerTh col="total" label="Total" right />
                   <OwnerTh col="open" label="Abiertos" right />
                   <OwnerTh col="closed" label="Cerrados" right />
+                  <OwnerTh col="nc" label="No corresp." right />
                   <OwnerTh col="rate" label="% cierre" right />
                   <OwnerTh col="delayed" label="Demorados" right />
                 </tr>
@@ -487,6 +491,7 @@ export default function OperativoView({ tickets: raw, fetchedAt, effectiveOwners
                       <td className="py-2 px-3 text-right font-mono font-semibold">{o.total}</td>
                       <td className="py-2 px-3 text-right font-mono">{o.open}</td>
                       <td className="py-2 px-3 text-right font-mono">{o.closed}</td>
+                      <td className="py-2 px-3 text-right font-mono" style={{ color: o.nc > 0 ? "#e6a303" : "#a8a59a" }}>{o.nc}</td>
                       <td className={`py-2 px-3 text-right font-mono ${rateColor}`}>{o.rate}%</td>
                       <td className="py-2 px-3 text-right font-mono">
                         {o.delayed > 0 ? (
