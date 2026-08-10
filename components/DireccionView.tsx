@@ -65,10 +65,14 @@ function KpiCard({ label, value, sub, color }: { label: string; value: string; s
 export default function DireccionView({
   tickets: raw,
   fetchedAt,
+  view = "resumen",
 }: {
   tickets: SerializedTicket[];
   fetchedAt: string;
+  view?: "resumen" | "tiempos";
 }) {
+  const showResumen = view !== "tiempos";
+  const showTiempos = view === "tiempos";
   const allTickets = useMemo(() => raw.map(hydrate), [raw]);
 
   // Filtro de período (por defecto, trimestre en curso).
@@ -211,6 +215,7 @@ export default function DireccionView({
         rightInfo={<>Período: <strong className="text-text font-semibold">{periodLabel}</strong> · <strong className="font-mono text-text">{total}</strong> tickets</>}
       />
 
+      {showResumen && (<>
       {/* 1. TICKETS INGRESADOS Y EVOLUCIÓN */}
       <section>
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
@@ -289,6 +294,9 @@ export default function DireccionView({
         </div>
       </section>
 
+      </>)}
+
+      {showTiempos && (<>
       {/* 3. OBJETIVO: TIEMPOS DE RESOLUCIÓN POR URGENCIA */}
       <section>
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-4">
@@ -479,6 +487,7 @@ export default function DireccionView({
           </table>
         </div>
       </section>
+      </>)}
     </div>
   );
 }
