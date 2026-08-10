@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 const OPS_LINKS = [
   { href: "/operativo", label: "Operativo" },
   { href: "/alertas", label: "Seguimiento" },
-  { href: "/agentes", label: "Agentes" },
 ];
 
 export default function Nav() {
@@ -56,13 +55,6 @@ export default function Nav() {
               </Link>
             );
           })}
-          <span className="text-border">|</span>
-          <Link
-            href="/direccion"
-            className="px-3 py-1 rounded-full border border-accent/40 text-accent hover:bg-accent hover:text-white font-medium transition-colors"
-          >
-            Dirección →
-          </Link>
         </nav>
       </div>
     </header>
