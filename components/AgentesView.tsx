@@ -51,7 +51,9 @@ type SerializedHistoryEntry = {
   days: number;
 };
 
-type SortKey = "name" | "currentOpen" | "currentDelayed" | "totalTouched" | "avgHolding" | "avgResolution" | "fastResponse";
+type SortKey =
+  | "name" | "currentOpen" | "currentDelayed" | "totalTouched" | "avgHolding" | "avgResolution" | "fastResponse"
+  | "prio_urgente" | "prio_alta" | "prio_media" | "prio_baja";
 
 export default function AgentesView({
   tickets: raw,
@@ -124,6 +126,16 @@ export default function AgentesView({
       arr = arr.filter((a) => (a.byPipeline[activePipeline] || 0) > 0);
     }
     arr.sort((a, b) => {
+      // Columnas de prioridad: los que no tienen dato ("—") van siempre al final.
+      if (sortKey.startsWith("prio_")) {
+        const lvl = sortKey.slice(5) as PriorityLevel;
+        const na = a.resolutionByPriority[lvl];
+        const nb = b.resolutionByPriority[lvl];
+        if (na === null && nb === null) return 0;
+        if (na === null) return 1;
+        if (nb === null) return -1;
+        return asc ? na - nb : nb - na;
+      }
       let va: number | string = 0;
       let vb: number | string = 0;
       switch (sortKey) {
@@ -297,12 +309,22 @@ export default function AgentesView({
                 <Th col="totalTouched" label="Tickets" right />
                 <Th col="avgHolding" label="Días prom. sosteniendo" right />
                 <Th col="avgResolution" label="Tiempo resolución" right />
-                {URGENCY_COLS.map((u) => (
-                  <th key={u.level} className="py-3 px-3 text-right whitespace-nowrap" title={`Mediana de resolución de tickets ${u.label} que cerró · meta ≤ ${SLA_TARGET_DAYS[u.level]}d`}>
-                    {u.label}
-                    <span className="block text-[9px] text-dim font-normal normal-case">≤{SLA_TARGET_DAYS[u.level]}d</span>
-                  </th>
-                ))}
+                {URGENCY_COLS.map((u) => {
+                  const col = `prio_${u.level}` as SortKey;
+                  const active = sortKey === col;
+                  const arrow = active ? (asc ? " ↑" : " ↓") : "";
+                  return (
+                    <th
+                      key={u.level}
+                      onClick={() => handleSort(col)}
+                      className={`py-3 px-3 text-right whitespace-nowrap cursor-pointer select-none hover:text-accent ${active ? "text-accent" : ""}`}
+                      title={`Ordenar por mediana de resolución de tickets ${u.label} que cerró · meta ≤ ${SLA_TARGET_DAYS[u.level]}d`}
+                    >
+                      {u.label}{arrow}
+                      <span className="block text-[9px] text-dim font-normal normal-case">≤{SLA_TARGET_DAYS[u.level]}d</span>
+                    </th>
+                  );
+                })}
                 <Th col="fastResponse" label="% &lt;2d" right />
                 <th className="text-left py-3 px-3">Donde más se traba</th>
               </tr>
