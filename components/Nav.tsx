@@ -16,9 +16,11 @@ export default function Nav() {
   if (isDireccion) {
     const isAgentes = pathname.startsWith("/direccion/agentes");
     const isTiempos = pathname.startsWith("/direccion/tiempos");
+    const isAnalisis = pathname.startsWith("/direccion/analisis");
     const DIR_TABS = [
-      { href: "/direccion", label: "Resumen", active: !isAgentes && !isTiempos },
+      { href: "/direccion", label: "Resumen", active: !isAgentes && !isTiempos && !isAnalisis },
       { href: "/direccion/tiempos", label: "Tiempos y plazos", active: isTiempos },
+      { href: "/direccion/analisis", label: "Análisis", active: isAnalisis },
       { href: "/direccion/agentes", label: "Agentes", active: isAgentes },
     ];
     return (
