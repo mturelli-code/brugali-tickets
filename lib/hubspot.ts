@@ -52,6 +52,20 @@ export const STAGE_LABELS: Record<string, string> = {
   "1138276222": "Cerrados", "1150525275": "No corresponde",
 };
 
+// Mapa embudo → IDs de etapa por etapa canónica (para leer el tiempo
+// acumulado en cada etapa: hs_v2_cumulative_time_in_<stageId>).
+export const STAGE_IDS: Record<
+  string,
+  { nuevo: string; progreso: string; espCliente: string; espInterna: string }
+> = {
+  "778101333": { nuevo: "1136629050", progreso: "1136629051", espCliente: "1136629052", espInterna: "1136452440" },
+  "811636614": { nuevo: "1195345714", progreso: "1195345715", espCliente: "1195345716", espInterna: "1195345717" },
+  "779395653": { nuevo: "1138326917", progreso: "1138326918", espCliente: "1138326919", espInterna: "1138326921" },
+  "779098922": { nuevo: "1138319738", progreso: "1138319739", espCliente: "1138319740", espInterna: "1150525271" },
+  "779095400": { nuevo: "1138265239", progreso: "1138265240", espCliente: "1138265241", espInterna: "1150614364" },
+  "779123273": { nuevo: "1138276219", progreso: "1138276220", espCliente: "1150525273", espInterna: "1150525274" },
+};
+
 export const HUBSPOT_BASE_URL =
   "https://app.hubspot.com/contacts/43958366/record/0-5";
 
@@ -120,7 +134,17 @@ export interface RawTicket {
     hs_v2_date_entered_current_stage?: string;
     hs_v2_time_in_current_stage?: string;
     prioridad_resolucion?: string;
+    // Tiempo acumulado por etapa (hs_v2_cumulative_time_in_<stageId>), en ms.
+    [key: string]: string | undefined;
   };
+}
+
+// Tiempo (en días) que un ticket pasó acumulado en cada etapa canónica.
+export interface StageTimes {
+  nuevo: number;
+  progreso: number;
+  espCliente: number;
+  espInterna: number;
 }
 
 // Clasificación de quién traba el ticket según etapa actual
@@ -192,6 +216,8 @@ export interface Ticket {
   // Análisis de demora
   daysInCurrentStage: number;
   delaySource: DelaySource;
+  // Tiempo acumulado por etapa (días); null si el embudo no está mapeado.
+  stageTimes: StageTimes | null;
   // Prioridad de resolución (KT)
   priority: PriorityLevel;
   priorityCode: string | null;
@@ -340,6 +366,15 @@ async function fetchOwners(token: string): Promise<Map<string, string>> {
 }
 
 async function searchPage(token: string, pipelineId: string, after?: string) {
+  const ids = STAGE_IDS[pipelineId];
+  const cumulativeProps = ids
+    ? [
+        `hs_v2_cumulative_time_in_${ids.nuevo}`,
+        `hs_v2_cumulative_time_in_${ids.progreso}`,
+        `hs_v2_cumulative_time_in_${ids.espCliente}`,
+        `hs_v2_cumulative_time_in_${ids.espInterna}`,
+      ]
+    : [];
   const body = {
     filterGroups: [
       {
@@ -355,6 +390,7 @@ async function searchPage(token: string, pipelineId: string, after?: string) {
       "subject", "nombre_sucursal", "nombre_producto", "hubspot_owner_id",
       "hs_v2_date_entered_current_stage", "hs_v2_time_in_current_stage",
       "prioridad_resolucion",
+      ...cumulativeProps,
     ],
     sorts: [{ propertyName: "createdate", direction: "ASCENDING" }],
     limit: 100,
@@ -449,6 +485,20 @@ export async function getAllTickets(): Promise<Ticket[]> {
           ? (PRIORITY_FROM_CODE[priorityCode] ?? "sin")
           : "sin";
 
+        // Tiempo acumulado por etapa (ms → días).
+        const stageIds = STAGE_IDS[pipelineId];
+        let stageTimes: StageTimes | null = null;
+        if (stageIds) {
+          const ms = (id: string) =>
+            Number(r.properties[`hs_v2_cumulative_time_in_${id}`] || 0) || 0;
+          stageTimes = {
+            nuevo: ms(stageIds.nuevo) / 86400000,
+            progreso: ms(stageIds.progreso) / 86400000,
+            espCliente: ms(stageIds.espCliente) / 86400000,
+            espInterna: ms(stageIds.espInterna) / 86400000,
+          };
+        }
+
         all.push({
           id: r.id,
           quarter,
@@ -476,6 +526,7 @@ export async function getAllTickets(): Promise<Ticket[]> {
           hubspotUrl: `${HUBSPOT_BASE_URL}/${r.id}`,
           daysInCurrentStage,
           delaySource,
+          stageTimes,
           priority,
           priorityCode,
         });
