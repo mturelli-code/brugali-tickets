@@ -1039,3 +1039,242 @@ export function buildAgentDeepMetrics(
       return sb - sa;
     });
 }
+
+// =================== ANÁLISIS DE DEMORAS POR ETAPA (¿dónde se traba?) ===================
+// Usa hs_v2_cumulative_time_in_<stageId> (Ticket.stageTimes) para medir cuánto
+// tiempo pasó cada ticket en cada etapa a lo largo de toda su vida.
+
+export type CanonStage = "nuevo" | "progreso" | "espInterna" | "espCliente";
+
+const STAGE_JOURNEY_META: { key: CanonStage; label: string; kind: "interno" | "externo" }[] = [
+  { key: "nuevo", label: 'Sin tomar ("Nuevo")', kind: "interno" },
+  { key: "progreso", label: "En progreso", kind: "interno" },
+  { key: "espInterna", label: "Esperando a otra área (interna)", kind: "interno" },
+  { key: "espCliente", label: "Esperando al local/cliente", kind: "externo" },
+];
+
+export const STAGE_JOURNEY_LABELS: Record<CanonStage, string> =
+  STAGE_JOURNEY_META.reduce((acc, m) => {
+    acc[m.key] = m.label;
+    return acc;
+  }, {} as Record<CanonStage, string>);
+
+export interface StageAgg {
+  key: CanonStage;
+  label: string;
+  kind: "interno" | "externo";
+  totalDays: number;
+  medianDays: number;
+  ticketCount: number;
+  pct: number;
+}
+
+export interface EmbudoAgg {
+  pipelineId: string;
+  name: string;
+  totalDays: number;
+  perTicket: number;
+  count: number;
+  nuevo: number;
+  progreso: number;
+  espCliente: number;
+  espInterna: number;
+  topStage: CanonStage;
+}
+
+export interface JourneyTicket {
+  id: string;
+  subject: string;
+  pipelineName: string;
+  ownerName: string | null;
+  stageLabel: string;
+  hubspotUrl: string;
+  nuevo: number;
+  progreso: number;
+  espCliente: number;
+  espInterna: number;
+  total: number;
+  daysOpen: number;
+}
+
+export interface StageJourney {
+  stages: StageAgg[];
+  totalActiveDays: number;
+  internalPct: number;
+  externalPct: number;
+  embudos: EmbudoAgg[];
+  worstOpen: JourneyTicket[];
+  hasData: boolean;
+}
+
+export function buildStageJourney(tickets: Ticket[]): StageJourney {
+  const withData = tickets.filter((t) => t.stageTimes);
+  const keys: CanonStage[] = ["nuevo", "progreso", "espInterna", "espCliente"];
+  const totals: Record<CanonStage, number> = { nuevo: 0, progreso: 0, espInterna: 0, espCliente: 0 };
+  const vals: Record<CanonStage, number[]> = { nuevo: [], progreso: [], espInterna: [], espCliente: [] };
+
+  for (const t of withData) {
+    const st = t.stageTimes!;
+    for (const k of keys) {
+      const v = st[k];
+      totals[k] += v;
+      if (v > 0.02) vals[k].push(v); // > ~30 min
+    }
+  }
+
+  const totalActiveDays = keys.reduce((s, k) => s + totals[k], 0);
+
+  const stages: StageAgg[] = STAGE_JOURNEY_META.map((m) => ({
+    key: m.key,
+    label: m.label,
+    kind: m.kind,
+    totalDays: totals[m.key],
+    medianDays: median(vals[m.key]) ?? 0,
+    ticketCount: vals[m.key].length,
+    pct: totalActiveDays > 0 ? (totals[m.key] / totalActiveDays) * 100 : 0,
+  })).sort((a, b) => b.totalDays - a.totalDays);
+
+  // Por embudo
+  const byPipe: Record<string, { n: number; p: number; ec: number; ei: number; count: number }> = {};
+  for (const t of withData) {
+    const st = t.stageTimes!;
+    const e = byPipe[t.pipelineId] || (byPipe[t.pipelineId] = { n: 0, p: 0, ec: 0, ei: 0, count: 0 });
+    e.n += st.nuevo;
+    e.p += st.progreso;
+    e.ec += st.espCliente;
+    e.ei += st.espInterna;
+    e.count++;
+  }
+  const embudos: EmbudoAgg[] = Object.entries(byPipe)
+    .map(([pid, e]) => {
+      const total = e.n + e.p + e.ec + e.ei;
+      const ranked: [CanonStage, number][] = [
+        ["nuevo", e.n],
+        ["progreso", e.p],
+        ["espInterna", e.ei],
+        ["espCliente", e.ec],
+      ];
+      ranked.sort((a, b) => b[1] - a[1]);
+      return {
+        pipelineId: pid,
+        name: PIPELINES[pid as keyof typeof PIPELINES] || pid,
+        totalDays: total,
+        perTicket: e.count > 0 ? total / e.count : 0,
+        count: e.count,
+        nuevo: e.n,
+        progreso: e.p,
+        espCliente: e.ec,
+        espInterna: e.ei,
+        topStage: ranked[0][0],
+      };
+    })
+    .sort((a, b) => b.perTicket - a.perTicket);
+
+  // Peores tickets abiertos (por tiempo total acumulado en el proceso)
+  const worstOpen: JourneyTicket[] = withData
+    .filter((t) => t.isOpen)
+    .map((t) => {
+      const st = t.stageTimes!;
+      const total = st.nuevo + st.progreso + st.espCliente + st.espInterna;
+      return {
+        id: t.id,
+        subject: t.subject || "(sin asunto)",
+        pipelineName: t.pipelineName,
+        ownerName: t.ownerName,
+        stageLabel: t.stageLabel,
+        hubspotUrl: t.hubspotUrl,
+        nuevo: st.nuevo,
+        progreso: st.progreso,
+        espCliente: st.espCliente,
+        espInterna: st.espInterna,
+        total,
+        daysOpen: t.daysOpen,
+      };
+    })
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 12);
+
+  const internal = totals.nuevo + totals.progreso + totals.espInterna;
+  return {
+    stages,
+    totalActiveDays,
+    internalPct: totalActiveDays > 0 ? (internal / totalActiveDays) * 100 : 0,
+    externalPct: totalActiveDays > 0 ? (totals.espCliente / totalActiveDays) * 100 : 0,
+    embudos,
+    worstOpen,
+    hasData: withData.length > 0,
+  };
+}
+
+// =================== RECORRIDO POR FAMILIA DE TICKET ===================
+// El "subject" del ticket es la familia (ej: "inocuidad", "entrega incorrecta").
+// Los tickets NO cambian de responsable durante su vida (un solo dueño de
+// principio a fin), así que el recorrido interno real es por ETAPA, no por
+// persona. Esto mide cuánto tarda una familia típica en cada etapa.
+
+export interface FamilyRow {
+  family: string;
+  area: string;
+  owner: string;
+  count: number;
+  nuevo: number;      // mediana de días
+  progreso: number;
+  espCliente: number;
+  espInterna: number;
+  total: number;      // suma de las medianas (recorrido típico)
+}
+
+function modeOf(counts: Record<string, number>): string {
+  let best = "—";
+  let n = -1;
+  for (const [k, v] of Object.entries(counts)) {
+    if (v > n) { n = v; best = k; }
+  }
+  return best;
+}
+
+export function buildFamilyJourney(tickets: Ticket[], minCount = 3): FamilyRow[] {
+  const withData = tickets.filter((t) => t.stageTimes && t.subject);
+  const groups = new Map<
+    string,
+    {
+      nuevo: number[]; progreso: number[]; espCliente: number[]; espInterna: number[];
+      areas: Record<string, number>; owners: Record<string, number>; count: number;
+    }
+  >();
+  for (const t of withData) {
+    const key = t.subject.trim();
+    let g = groups.get(key);
+    if (!g) {
+      g = { nuevo: [], progreso: [], espCliente: [], espInterna: [], areas: {}, owners: {}, count: 0 };
+      groups.set(key, g);
+    }
+    const st = t.stageTimes!;
+    if (st.nuevo > 0.02) g.nuevo.push(st.nuevo);
+    if (st.progreso > 0.02) g.progreso.push(st.progreso);
+    if (st.espCliente > 0.02) g.espCliente.push(st.espCliente);
+    if (st.espInterna > 0.02) g.espInterna.push(st.espInterna);
+    g.areas[t.pipelineName] = (g.areas[t.pipelineName] || 0) + 1;
+    const own = t.ownerName || "Sin asignar";
+    g.owners[own] = (g.owners[own] || 0) + 1;
+    g.count++;
+  }
+
+  const rows: FamilyRow[] = [];
+  for (const [family, g] of Array.from(groups.entries())) {
+    if (g.count < minCount) continue;
+    const nuevo = median(g.nuevo) ?? 0;
+    const progreso = median(g.progreso) ?? 0;
+    const espCliente = median(g.espCliente) ?? 0;
+    const espInterna = median(g.espInterna) ?? 0;
+    rows.push({
+      family,
+      area: modeOf(g.areas),
+      owner: modeOf(g.owners),
+      count: g.count,
+      nuevo, progreso, espCliente, espInterna,
+      total: nuevo + progreso + espCliente + espInterna,
+    });
+  }
+  return rows.sort((a, b) => b.total - a.total);
+}
