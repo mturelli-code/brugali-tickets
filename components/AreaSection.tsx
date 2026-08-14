@@ -115,6 +115,10 @@ export default function AreaSection({ area: a, effectiveOwners = {} }: { area: A
             <div className="font-mono font-semibold text-base text-text">{a.open}</div>
           </div>
           <div className="text-center">
+            <div className="text-[10px] uppercase tracking-wider text-muted">No corresp.</div>
+            <div className="font-mono font-semibold text-base text-muted">{a.noCorresp}</div>
+          </div>
+          <div className="text-center">
             <div className="text-[10px] uppercase tracking-wider text-muted">Demorados</div>
             <div className={`font-mono font-semibold text-base ${delayColor}`}>{a.delayedCount}</div>
           </div>
@@ -125,9 +129,9 @@ export default function AreaSection({ area: a, effectiveOwners = {} }: { area: A
       {expanded && (
         <div className="px-6 py-5 border-t border-border space-y-6">
           {/* Scorecards laterales */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <div className="rounded-lg bg-surface2 p-3 border-l-4 border-accent">
-              <div className="text-[10px] uppercase tracking-wider text-muted">Ingresados Q2</div>
+              <div className="text-[10px] uppercase tracking-wider text-muted">Ingresados</div>
               <div className="font-mono text-2xl font-semibold text-text">{a.total}</div>
             </div>
             <div className="rounded-lg bg-surface2 p-3 border-l-4 border-brugaligreen">
@@ -137,6 +141,10 @@ export default function AreaSection({ area: a, effectiveOwners = {} }: { area: A
             <div className="rounded-lg bg-surface2 p-3 border-l-4 border-brugaliamber">
               <div className="text-[10px] uppercase tracking-wider text-muted">Abiertos</div>
               <div className="font-mono text-2xl font-semibold text-text">{a.open}</div>
+            </div>
+            <div className="rounded-lg bg-surface2 p-3 border-l-4 border-border">
+              <div className="text-[10px] uppercase tracking-wider text-muted">No corresponde</div>
+              <div className="font-mono text-2xl font-semibold text-text">{a.noCorresp}</div>
             </div>
             <div className="rounded-lg bg-surface2 p-3 border-l-4 border-brugalired">
               <div className="text-[10px] uppercase tracking-wider text-muted">Demorados (+7d)</div>
